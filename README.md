@@ -65,17 +65,21 @@ proportions to reflect how usage is spread across models.
 
 - It is technically possible that some requests are not captured by the
 Broadcast feature due to errors / downtime (OpenRouter documents no
-delivery guarantees or retries). To safeguard against this, a scheduled
-reconciliation job verifies our data from the previous day against the
-OpenRouter analytics endpoint (which requires a separate management key,
-stored as an Edge Function secret on the user's own Supabase instance).
-If there is a mismatch, the database is corrected retroactively to match
-the analytics data which, although not real-time, is a better source of
-truth.
+delivery guarantees or retries). Burnbar therefore splits its data by
+source: past days are served from OpenRouter's analytics endpoint (the
+authoritative record, synced daily by a scheduled job into its own
+table), while today is served live from broadcast data. Today's numbers
+are best-effort and become authoritative the next day when the analytics
+data lands - no diffing or reconciliation logic needed. The analytics
+endpoint requires a separate management key, which is stored exclusively
+as an Edge Function secret on the user's own Supabase instance and never
+touches the frontends.
 - To minimize monitoring latency, the data transmitted through the
 WebSocket (Supabase Realtime) should be minimal (most recent request
-only). The macOS frontend stores data locally in a SQLite database, only
-relying on larger payloads on periodic re-syncs.
+only). Frontends fetch a small baseline (30 days of per-model daily
+aggregates via a single database view) on launch or manual refresh, and
+layer live request events on top in memory - the dataset is small enough
+that no local database is needed.
 - Burnbar only needs token counts, costs, timing, and model information -
 never prompt or completion content. The setup instructions therefore
 require enabling OpenRouter's **Privacy Mode** on the Broadcast

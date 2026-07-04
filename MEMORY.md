@@ -6,52 +6,51 @@ Burnbar is an open-source, self-host-only real-time LLM cost meter for
 OpenRouter users: the Broadcast feature webhooks OTLP traces to a Supabase
 Edge Function, and frontends (Go/Charm TUI first, then the core-product
 macOS SwiftUI menubar app) render live per-model token/spend bars via
-Supabase Realtime. Currently in the planning-complete, pre-implementation
-phase — SPEC.md is the phase-by-phase implementation runbook.
+Supabase Realtime. Currently at the start of implementation — SPEC.md is
+the phase-by-phase runbook.
 
 ## Current Status
 
-Working in the planning/specification domain, now finished: the idea was
-validated with external research (Broadcast webhook, analytics/credits
-APIs, Supabase limits, competitor landscape), scope was cut to
-self-host-only (no hosted instance, no subscriptions), and the stack was
-locked (Supabase backend; Go + Bubble Tea/Lip Gloss/Harmonica TUI; Swift
-SwiftUI menubar app). No code exists yet — the repo contains only
-README.md, SPEC.md, and this file, and is not yet a git repository.
-Next up is implementation, starting with SPEC.md Phase 0 (scaffolding)
-then Phase 1 (backend ingest pipeline); Phases 1+2 together are the
-weekend-MVP finish line.
+Working on Phase 0→1 (scaffolding → backend ingest pipeline). Repo
+scaffolding is committed and pushed to a public GitHub repo; the Supabase
+cloud project is created and linked (cloud-first workflow — Broadcast
+needs a public URL, so local Docker is optional). The architecture was
+redesigned this session: diff-based reconciliation is gone, replaced by a
+source-split model (`analytics_daily` for past UTC days via a daily 01:00
+UTC full-window-upsert cron, broadcast `requests` for today with 3-day
+retention, merged by a `usage_daily` view with analytics-wins precedence).
+Next: log-only `ingest` edge function to capture real OTLP fixtures.
 
 ## Project Roadmap
 
-- **Now:** Phase 0–1 — repo scaffolding + backend ingest pipeline (schema, `ingest` edge function, OTLP parser, real Broadcast fixture, end-to-end verify)
+- **Now:** Phase 1 — backend ingest pipeline (log-only ingest → capture multi-model OTLP fixtures → schema migration + view → parser + idempotent insert → e2e verify)
 - **Next:** Phase 2 — Go TUI (Charm stack, Realtime subscription with pre-approved polling fallback, animated per-model bars, credits header)
-- **Later:** Phase 3 — daily reconciliation edge function against OpenRouter analytics API
-- **Later:** Phase 4–5 — macOS menubar app (core product), then self-host setup docs & release polish
+- **Later:** Phase 3 — `sync-analytics` daily cron (full 30-day upsert + broadcast pruning)
+- **Later:** Phase 4–5 — macOS menubar app (core product, in-memory state, no SQLite), then self-host setup docs & release polish
 
 ## Last Session Summary — 2026-07-04
 
-Evaluated the project idea end-to-end with web research (confirmed
-Broadcast→webhook viability, OTLP payload contents, Supabase pricing
-traps, and a crowded-but-not-identical competitor field), then decided to
-cut the hosted instance entirely and go self-host-only. Rewrote README.md
-to reflect the new philosophy and stack decisions, and created SPEC.md — a
-detailed phase/checklist runbook (with data model, secrets, risks with
-pre-approved fallbacks, and a decision log) designed for agents to resume
-work across sessions.
+Scaffolded the repo (layout, .gitignore, MIT license, `scripts/test-request.sh`);
+user created the public GitHub repo and the linked Supabase cloud project.
+Redesigned the data architecture: replaced diff-based reconciliation with a
+source-split model (analytics for past days, broadcast for today, merged in
+one SQL view), verified OpenRouter analytics timing (~30 min after UTC
+midnight) and credits caching (~60s) via web research, dropped SQLite from
+the macOS app, and rewrote SPEC.md/README.md with the new design plus six
+new decision-log entries.
 
 ## Completed Last Session
 
-- Validated technical viability via research: OpenRouter Broadcast webhook (OTLP JSON, custom auth headers, Privacy Mode), analytics endpoint (management key, 24h lag), credits API, Supabase free-tier limits
-- Market research: identified CodexBar, or-observer, and other menubar trackers; confirmed the real-time per-model niche is open
-- Decision: cut hosted instance — open source, personal self-hosted use only
-- Decision: Go + Charm stack (Bubble Tea/Lip Gloss/Harmonica) for the TUI, built first; macOS menubar app remains the core product
-- Rewrote README.md (philosophy, apps order, technical considerations: Privacy Mode, webhook secret, frontend-side credits polling)
-- Created SPEC.md with 6 phases, checklists, data model, risk register, and decision log
+- Repo scaffolding: layout per SPEC §6, `.gitignore`, MIT LICENSE, `scripts/test-request.sh` (model slug overridable, for multi-model fixture capture); committed & pushed to public GitHub repo (user)
+- Supabase cloud project created and linked via `supabase init` + `supabase link` (user); cloud-first workflow decided since Broadcast requires a public destination
+- Design: source-split model replaces reconciliation — `analytics_daily` (authoritative, kept forever) + `requests` (broadcast, 3-day retention) + `usage_daily` view (`security_invoker`, analytics-wins precedence, no double counting)
+- Research-verified: analytics `/api/v1/activity` covers completed UTC days, ~30 min availability after UTC midnight, buckets by request START time (matches OTLP span start); credits endpoint works with regular key, cached ~60s; no rate-limit concerns for metadata polling
+- Decisions: daily 01:00 UTC full-30-day-window upsert cron (no retry logic — self-healing), management key server-side only, macOS app in-memory state (no GRDB), credits displayed as polled (60s, no local decrement; event-triggered re-poll is pre-approved polish)
+- SPEC.md + README.md rewritten accordingly (new §2 diagram, full §4 SQL, Phase 1/2/3/4 checklists, risks, decision log)
 
 ## Up Next
 
-- [ ] Phase 0: `git init`, `.gitignore`, MIT LICENSE, repo layout (`supabase/`, `tui/`, `macos/`, `docs/`), `supabase init` + verify local `supabase start`, initial commit
-- [ ] Phase 1: migration for `requests` table (indexes, RLS, realtime publication) + `ingest` edge function skeleton with secret-header auth and `X-Test-Connection` handling
-- [ ] Phase 1: capture a real Broadcast OTLP payload as a test fixture and document the attribute→column mapping
-- [ ] Phase 1: OTLP parser as a pure tested function + idempotent insert; deploy and verify end-to-end
+- [ ] Commit pending SPEC.md/README.md changes + `supabase/config.toml` (user)
+- [ ] Write & deploy log-only `ingest` edge function (secret-header auth, `X-Test-Connection` handling, `--no-verify-jwt`); guide user through OpenRouter Broadcast setup (Privacy Mode ON, custom secret header)
+- [ ] Capture OTLP fixtures from 2–3 different models via `scripts/test-request.sh`, save to `supabase/tests/fixtures/`, compare shapes to confirm the attribute→column mapping
+- [ ] Migration: `requests` + `analytics_daily` + `usage_daily` view + RLS + realtime publication, then the real OTLP parser with idempotent insert
