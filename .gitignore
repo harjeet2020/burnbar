@@ -1,0 +1,27 @@
+# --- Secrets & environment ---
+# Never commit keys. Local config goes in .env files; an .env.example
+# (committed) documents which variables are needed.
+.env
+.env.*
+!.env.example
+
+# --- macOS ---
+.DS_Store
+
+# --- Supabase local artifacts ---
+# Created by the Supabase CLI for the local Docker stack; never source code.
+supabase/.temp/
+supabase/.branches/
+
+# --- Go (tui/) ---
+tui/burnbar
+tui/dist/
+tui/*.test
+
+# --- Xcode (macos/) ---
+macos/**/xcuserdata/
+macos/**/DerivedData/
+*.xcuserstate
+
+# --- Node tooling (if ever needed for edge function dev) ---
+node_modules/
