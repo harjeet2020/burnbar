@@ -1,0 +1,111 @@
+// Package core is the pure heart of the TUI: domain types, window math,
+// aggregation, bar geometry, and formatting. Nothing in this package
+// touches the network, the terminal, or the clock — everything is a pure
+// function of its inputs, testable with go test alone (tui/SPEC.md §10).
+//
+// Stage A ships the domain types, provisional formatting and bar-geometry
+// helpers, and fixture data; Stage B adds window math, aggregate(), and
+// the exhaustive test suite that formalizes the provisional helpers.
+package core
+
+import "time"
+
+// Timeframe is the active aggregation window. "today" is the user's local
+// calendar day; week/month are the last 7/30 UTC days (root SPEC §2).
+type Timeframe int
+
+// The three selectable windows, in `t`-cycle order.
+const (
+	TimeframeToday Timeframe = iota
+	TimeframeWeek
+	TimeframeMonth
+)
+
+// Label returns the lowercase UI label used in the header selector.
+func (t Timeframe) Label() string {
+	switch t {
+	case TimeframeWeek:
+		return "week"
+	case TimeframeMonth:
+		return "month"
+	default:
+		return "today"
+	}
+}
+
+// Next cycles today → week → month → today (the `t` key, tui/SPEC.md §2).
+func (t Timeframe) Next() Timeframe { return (t + 1) % 3 }
+
+// Timeframes lists all windows in display order for the header selector.
+var Timeframes = []Timeframe{TimeframeToday, TimeframeWeek, TimeframeMonth}
+
+// ModelStat is one model's aggregate over the active window — the shape
+// the bars list and details screen render from. In Stage B this becomes
+// the output of aggregate(); Stage A fills it from fixtures.
+//
+// NULL vs 0 (root SPEC §2): pointer fields distinguish "the payload did
+// not report this" (nil → render "—") from "reported as zero" (0). Ratios
+// derived from nil sums must never be computed.
+type ModelStat struct {
+	// Name is the model alias slug, e.g. "deepseek/deepseek-v4-flash".
+	Name string
+	// Requests is the number of requests in the window.
+	Requests int64
+	// InputTokens and OutputTokens are summed over the window.
+	InputTokens  int64
+	OutputTokens int64
+	// Cost is the total window cost in USD.
+	Cost float64
+	// InputCost / OutputCost are the summed actual split costs (cache
+	// discounts already embodied). nil when the payload never reported
+	// them — the bar segment split then falls back to token volumes
+	// (tui/SPEC.md §3).
+	InputCost  *float64
+	OutputCost *float64
+	// Accent1Tokens are tokens from live rows newer than the accent
+	// anchor, excluding the single most recent request (tui/SPEC.md §5).
+	Accent1Tokens int64
+	// Accent2Tokens are tokens of the single most recent live request.
+	Accent2Tokens int64
+}
+
+// TotalTokens is the bar-length driver: input + output (tui/SPEC.md §3).
+func (m ModelStat) TotalTokens() int64 { return m.InputTokens + m.OutputTokens }
+
+// ConnState is the live-source connection state shown in the status row —
+// always rendered as symbol + word, never color alone (tui/SPEC.md §2).
+type ConnState int
+
+// Connection states, healthiest first.
+const (
+	ConnLive ConnState = iota
+	ConnPolling
+	ConnReconnecting
+	ConnOffline
+)
+
+// Snapshot is everything the meter screen renders for one timeframe. In
+// Stage A it is produced by Fixture(); later stages assemble it from the
+// real stores (baseline, rows, credits, connection).
+type Snapshot struct {
+	// Timeframe this snapshot was aggregated for.
+	Timeframe Timeframe
+	// Models, sorted by window cost descending, ties by name ascending —
+	// the stable order that prevents list jitter (tui/SPEC.md §2).
+	Models []ModelStat
+	// Spend is the total cost of the window (header row 2).
+	Spend float64
+	// Credits is the remaining OpenRouter balance; nil when unknown (no
+	// key configured, or not yet fetched).
+	Credits *float64
+	// CreditsAt is when Credits was last fetched; its age is always shown.
+	CreditsAt time.Time
+	// LastRequestAt is the wall time of the newest request in the window;
+	// zero when the window is empty.
+	LastRequestAt time.Time
+	// LagSeconds is the meter lag (request concluded → seen); nil renders
+	// as "—" (clock skew clamp, tui/SPEC.md §8).
+	LagSeconds *float64
+	// Conn is the live-source connection state.
+	Conn ConnState
+}

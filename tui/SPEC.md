@@ -458,18 +458,30 @@ bar geometry), `internal/data` (config, PostgREST, credits, LiveSource
 + both impls), `internal/ui` (model/update/view split, styles/tokens,
 keymap, screens). Everything in `core` is testable with `go test` alone.
 
-### Stage A — Shell
-- [ ] Go module scaffold; Bubble Tea v2 program on the alt screen;
+### Stage A — Shell ✅ (2026-07-05)
+- [x] Go module scaffold; Bubble Tea v2 program on the alt screen;
   clean quit (`q`/`ctrl+c`), suspend/resume, resize handling
-- [ ] Config loading + validation with the friendly pre-TUI error path;
+  — suspend needs an explicit `ctrl+z → tea.Suspend` binding in v2
+  (raw mode swallows the key); panic-restore verified empirically
+- [x] Config loading + validation with the friendly pre-TUI error path;
   committed `config.example.toml`; `config.toml` gitignore guard
-- [ ] Central keymap (`bubbles/key`) + help bubble hint row; `?` overlay
-- [ ] Full layout rendered from fake fixture data: header, bars list
+  — note: config path is `~/.config/burnbar/` on macOS too (deliberate;
+  `os.UserConfigDir()` would give `~/Library/Application Support`)
+- [x] Central keymap (`bubbles/key`) + help bubble hint row; `?` overlay
+- [x] Full layout rendered from fake fixture data: header, bars list
   (label row + bar row), status row, hints — at every ladder breakpoint
-  (§4), including the too-small state
-- [ ] Semantic style tokens (§5) incl. `NO_COLOR`/ASCII degradation
-- [ ] Mouse augmentation: wheel scroll, click select, click-through to
-  details, timeframe click
+  (§4), including the too-small state — verified via VHS screenshots at
+  120×35 / 90×28 / 70×20 / 50×15 / 38×8 + scroll mode at 90×12
+- [x] Semantic style tokens (§5) incl. `NO_COLOR`/ASCII degradation
+- [x] Mouse augmentation: wheel scroll, click select, click-through to
+  details, timeframe click — wired and hit-tested through the same
+  layout math the view renders from; **needs a manual interactive pass**
+  (VHS cannot send mouse events)
+
+Stage A notes: format/bar-geometry helpers in `internal/core` are
+provisional (written to §3/§9 spec, no tests yet) — Stage B formalizes
+them with its test suite. A details-screen *stub* exists so the
+enter/click-through navigation is real; Stage E replaces its body.
 
 ### Stage B — Pure core
 - [ ] Domain types; window math — local today, UTC week/month, both

@@ -1,0 +1,39 @@
+# Burnbar TUI configuration template
+# ──────────────────────────────────────────────────────────────────────
+# Copy this file to your user config directory and fill in your values:
+#
+#     mkdir -p ~/.config/burnbar
+#     cp config.example.toml ~/.config/burnbar/config.toml
+#
+# Your real config lives OUTSIDE the repo and must never be committed
+# (the repo .gitignore also refuses any config.toml as a safety net).
+#
+# Every key can instead be provided (or overridden) via environment
+# variables — handy for development:
+#
+#     supabase_url       ← BURNBAR_SUPABASE_URL
+#     supabase_anon_key  ← BURNBAR_SUPABASE_ANON_KEY
+#     openrouter_api_key ← BURNBAR_OPENROUTER_API_KEY
+#     live_source        ← BURNBAR_LIVE_SOURCE
+# ──────────────────────────────────────────────────────────────────────
+
+# Your Supabase project URL — where your usage data lives.
+# Find it: Supabase dashboard → Project Settings → API → "Project URL".
+supabase_url = "https://YOUR-PROJECT-REF.supabase.co"
+
+# The project's publishable ("anon") key. Read-only under row-level
+# security, but keep it out of git anyway.
+# Find it: Supabase dashboard → Project Settings → API Keys → "anon public".
+supabase_anon_key = "YOUR-ANON-KEY"
+
+# Optional: your OpenRouter inference API key, used ONLY to poll the
+# credits endpoint directly from this machine (it never touches your
+# backend). Leave empty to run without the credits balance display.
+# Create one: https://openrouter.ai/settings/keys
+openrouter_api_key = ""
+
+# Optional: how live request events reach the app.
+#   "realtime" (default) — Supabase Realtime WebSocket, lowest latency
+#   "poll"               — 2s PostgREST polling; escape hatch for
+#                          networks that fight WebSockets
+live_source = "realtime"

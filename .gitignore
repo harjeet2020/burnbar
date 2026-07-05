@@ -18,6 +18,10 @@ tui/burnbar
 tui/dist/
 tui/*.test
 
+# Real Burnbar config never belongs in the repo (the template is
+# config.example.toml); guard against accidental copies anywhere.
+config.toml
+
 # --- Xcode (macos/) ---
 macos/**/xcuserdata/
 macos/**/DerivedData/
