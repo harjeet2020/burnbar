@@ -22,7 +22,7 @@ set -euo pipefail
 # Fail fast with a clear message if the key is missing.
 : "${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in your environment (see usage comment)}"
 
-MODEL="${1:-deepseek/deepseek-chat}"
+MODEL="${1:-deepseek/deepseek-v4-flash}"
 
 echo "→ Sending test request to model: ${MODEL}"
 
@@ -36,10 +36,10 @@ RESPONSE="$(curl --silent --show-error --fail-with-body \
   "messages": [
     {
       "role": "user",
-      "content": "In one short sentence: what does the 'const' keyword do in JavaScript?"
+      "content": "Explain the difference between type and interface in TypeScript in a short paragraph of 3-5 sentences."
     }
   ],
-  "max_tokens": 60
+  "max_tokens": 300
 }
 JSON
 )"

@@ -1,4 +1,5 @@
 # Burnbar - LLM cost metering app
+See the tokens you burn in real time.
 
 ## Introduction
 
@@ -8,6 +9,8 @@ quickly, especially when working on a complex feature. AI provider
 dashboards provide some measure of control, but are impractical to check
 all the time. Burnbar is architected differently - it allows for convenient
 live monitoring of LLM usage & its costs, as soon as the requests are made.
+
+## How it works
 
 This is possible because of the OpenRouter Broadcast feature. The usual
 analytics endpoint is not suitable, because it has an effective refresh
@@ -23,15 +26,9 @@ The practical effect is a real-time mini-dashboard that shows the most
 important LLM usage metrics at a glance - accurate input / output tokens
 and currency spend per model within a set timeframe, as well as the
 remaining OpenRouter credit balance. The obvious limitation is that it
-only works for requests funneled through OpenRouter - but it's a conscious
+only works for requests made through OpenRouter - but it's a conscious
 compromise. Other LLM providers do not support the Broadcast feature, and
-their analytics APIs are either restricted or lacking, so the only way to
-achieve real-time metrics would be through a proxy - but that is not ideal,
-since it requires the user to reconfigure all their tools to the proxy, and
-any traffic that goes to the provider directly is lost. We might consider
-adding a proxy option to support other providers in the future - but since
-OpenRouter is the dominant choice among developers who want to use a
-variety of models with a single API key, it is our primary focus for MVP.
+their analytics APIs are either restricted or lacking. A proxy could work, but would require reconfiguring all tools to funnel requests through it. Taking these into account, we decided to work with OpenRouter exclusively - it is the developer default, after all.
 
 ## Apps
 
@@ -65,15 +62,17 @@ proportions to reflect how usage is spread across models.
 
 - It is technically possible that some requests are not captured by the
 Broadcast feature due to errors / downtime (OpenRouter documents no
-delivery guarantees or retries). Burnbar therefore splits its data by
-source: past days are served from OpenRouter's analytics endpoint (the
-authoritative record, synced daily by a scheduled job into its own
-table), while today is served live from broadcast data. Today's numbers
-are best-effort and become authoritative the next day when the analytics
-data lands - no diffing or reconciliation logic needed. The analytics
-endpoint requires a separate management key, which is stored exclusively
-as an Edge Function secret on the user's own Supabase instance and never
-touches the frontends.
+delivery guarantees or retries). Burnbar accepts this trade-off by
+design: it is a **live meter, not an accounting system**. Broadcast data
+is the app's single source of truth and is kept for 30 days (matching
+the app's largest timeframe window; a scheduled job prunes older rows).
+The OpenRouter dashboard remains the authoritative record for billing
+and long-term statistics, and the credit balance shown in the app always
+reflects your true remaining credits regardless of any missed capture.
+The upside of building on broadcast data exclusively is that it is far
+richer than OpenRouter's analytics API: per-request timing, the actual
+routed provider (including quantization variant), cached and reasoning
+token counts, and the quoted unit prices are all captured.
 - To minimize monitoring latency, the data transmitted through the
 WebSocket (Supabase Realtime) should be minimal (most recent request
 only). Frontends fetch a small baseline (30 days of per-model daily
@@ -103,6 +102,49 @@ This single-user, self-host-only model keeps the project radically
 simple: no authentication system, no rate limiting, no multi-tenancy, no
 custody of anyone else's API keys, and no hosting costs that scale with
 adoption. Your usage data lives in your own database, end to end.
+
+## Setting up your own instance
+
+Everything below happens once, takes about 15 minutes, and requires only
+free accounts. You will need the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
+installed, a [Supabase](https://supabase.com) account, and an
+[OpenRouter](https://openrouter.ai) account.
+
+1. **Create a Supabase project** in the [dashboard](https://supabase.com/dashboard)
+   (the free tier is plenty). This is where your usage data will live.
+2. **Clone this repo and configure your environment:** copy the committed
+   template with `cp .env.example .env` and fill in the values following
+   the comments in the file - your project URL and publishable (anon) key
+   from the Supabase dashboard, an OpenRouter inference API key, and a
+   fresh webhook secret generated with `openssl rand -hex 32`. The real
+   `.env` is gitignored so your secrets never end up in a commit.
+3. **Link the repo to your project:** `supabase login`, then
+   `supabase link --project-ref <your-project-ref>` (the ref is in your
+   project's dashboard URL).
+4. **Push the database schema:** `supabase db push` creates the tables,
+   the `usage_daily` view, row-level security policies, and the realtime
+   publication.
+5. **Push the server-side secret:**
+   `supabase secrets set BURNBAR_WEBHOOK_SECRET=<your-generated-secret>` -
+   this is what authenticates webhook deliveries from OpenRouter.
+6. **Deploy the edge function:**
+   `supabase functions deploy ingest`. JWT verification is
+   already disabled for the webhook receiver via `supabase/config.toml`
+   (OpenRouter cannot send a Supabase JWT - the secret header is the
+   authentication).
+7. **Connect OpenRouter Broadcast:** in
+   [OpenRouter settings](https://openrouter.ai/settings/broadcast), add a
+   destination pointing at
+   `https://<your-project-ref>.supabase.co/functions/v1/ingest`, add a
+   custom header named `X-Burnbar-Secret` with your generated secret as
+   the value, and switch **Privacy Mode ON** so prompt and completion text
+   never leave OpenRouter. Saving fires a test probe at your function and
+   should report the connection as verified.
+8. **Verify the pipeline:** make any OpenRouter request (or run
+   `scripts/test-request.sh`) and watch the row appear in the `requests`
+   table in your Supabase dashboard within seconds. Point a frontend at
+   your instance (each reads the same values you put in `.env`) and the
+   bars light up live.
 
 ## Roadmap
 

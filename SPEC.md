@@ -20,9 +20,14 @@ product) subscribe via Supabase Realtime and render per-model usage bars
 (input tokens, output tokens, spend) for a selectable window (day / week /
 month), plus the remaining OpenRouter credit balance.
 
-Single-user, self-hosted, open source. No auth system, no multi-tenancy,
-no hosted instance. See README for philosophy and UI/UX description —
-the UI/UX section of the README is the design contract for both frontends.
+Burnbar is a **live meter, not an accounting system**: broadcast data is
+the app's single source of truth, the OpenRouter dashboard remains the
+authoritative record for billing and long-term stats, and the credits
+endpoint always reflects the true balance regardless of what Burnbar
+captured. Single-user, self-hosted, open source. No auth system, no
+multi-tenancy, no hosted instance. See README for philosophy and UI/UX
+description — the UI/UX section of the README is the design contract for
+both frontends.
 
 ## 2. Architecture
 
@@ -31,17 +36,12 @@ OpenRouter (Broadcast, Privacy Mode ON, custom auth header)
     │  POST OTLP JSON per completed request
     ▼
 Supabase Edge Function `ingest`  ── verifies shared-secret header
-    │  parse OTLP → normalized row
+    │  parse OTLP → normalized row, idempotent insert
     ▼
-Postgres `requests` (per-request broadcast rows; 3-day retention)
-Postgres `analytics_daily` (authoritative daily aggregates; kept forever)
-    ▲
-    │  Edge Function `sync-analytics` (cron, daily 01:00 UTC):
-    │  fetch full 30-day window from OpenRouter `/api/v1/activity`,
-    │  upsert per (day, model); prune `requests` rows older than 3 days
+Postgres `requests` — single source of truth
+    │  (30-day retention via monthly pg_cron prune)
     │
-`usage_daily` view merges both tables — for each UTC day:
-  the analytics_daily row if present, else aggregated broadcast rows
+`usage_daily` view — per-day, per-model aggregates over `requests`
     │                        ┌──────────────────────────────┐
     ├── PostgREST ──────────►│ Go TUI (Bubble Tea)          │
     │  (view; open/refresh)  │ macOS menubar (SwiftUI)      │
@@ -53,24 +53,29 @@ Frontends also poll OpenRouter `/api/v1/credits` directly
 (user's key stored locally; never sent to the backend).
 ```
 
-**Source-split model:** past UTC days are served from `analytics_daily`
-(authoritative, from OpenRouter's analytics API), while today is served
-from live broadcast rows. There is no diff-based reconciliation — for any
-given day the view reads from exactly one source, so double counting is
-structurally impossible. Today's numbers are best-effort (Broadcast has no
-delivery guarantees) and become authoritative the next day when the
-analytics row lands.
+**Broadcast-only model:** every number in the app comes from broadcast
+rows in `requests`. There is no second ingestion path, no analytics sync,
+no reconciliation, and no OpenRouter management key anywhere in the
+system. OpenRouter documents no delivery guarantees or retries for
+Broadcast, so occasional silent gaps are possible (e.g. an outage on
+either side, or a paused free-tier project) — this is an **accepted
+trade-off**: captured fixtures showed broadcast delivers far richer data
+than the analytics API (routed provider + quantization, cached tokens,
+reasoning tokens, split costs, unit prices, per-request timing), and for
+a spend-awareness tool a missed row only means a bar undercounts. The
+financial ground truth (credit balance, OpenRouter dashboard) is
+unaffected by any missed delivery.
 
 **Day-bucketing invariant:** all bucketing uses **request start time in
-UTC**, in both sources — the analytics API aggregates by request start
-time, and `requested_at` is the OTLP span start time. A request that
-starts 23:58 and finishes 00:03 lands in the same day in both sources.
+UTC** — `requested_at` is the OTLP span start time
+(`startTimeUnixNano`). This matches how OpenRouter's own dashboard
+buckets usage, so day totals line up when eyeballing the two.
 
 ## 3. Stack & Rationale
 
 | Layer | Choice | Why |
 |---|---|---|
-| Backend | Supabase: Postgres + Edge Functions (Deno/TypeScript) + Realtime + Cron | One free-tier project covers ingest, storage, live push, and scheduling. TypeScript edge functions match the maintainer's stack. |
+| Backend | Supabase: Postgres + Edge Function (Deno/TypeScript) + Realtime + pg_cron | One free-tier project covers ingest, storage, live push, and scheduled retention. TypeScript edge functions match the maintainer's stack. Retention is a single SQL statement scheduled with pg_cron — no second function needed. |
 | CLI TUI | Go + Bubble Tea + Lip Gloss + Harmonica | Best-in-class TUI polish and spring animations; single static binary; cross-platform; highly agent-writable and reviewable. |
 | macOS app | Swift + SwiftUI (`MenuBarExtra`), supabase-swift | Native menubar UX is the core product. Official Supabase Swift SDK covers Realtime + PostgREST. In-memory state only — the 30-day dataset is tiny (see Decision Log 2026-07-04); no local DB. |
 | Docs | Markdown in-repo | Self-host setup guide is a first-class deliverable. |
@@ -80,63 +85,92 @@ exported symbols, small pure functions for parsing (testable without a
 running server). Go follows standard idioms + doc comments on exported
 identifiers. Swift follows Swift API Design Guidelines + doc comments.
 
-## 4. Data Model (initial)
+## 4. Data Model
+
+The `requests` table captures **everything the broadcast payload
+offers** — webhook data cannot be backfilled, so anything not stored at
+delivery time is lost forever (capture-now-or-never). Confirmed against
+the captured fixture(s) in `supabase/tests/fixtures/`; OpenRouter uses
+the OpenTelemetry GenAI semantic conventions (`gen_ai.*`) plus
+`trace.metadata.openrouter.*` extensions.
+
+### Attribute → column mapping (from fixtures)
+
+| Column | OTLP source |
+|---|---|
+| `trace_id` | `span.traceId` |
+| `span_id` | `span.spanId` |
+| `model` | attr `gen_ai.request.model` (alias slug, e.g. `deepseek/deepseek-v4-flash` — NOT the versioned permaslug; groups naturally in the UI) |
+| `author` | attr `gen_ai.provider.name` (model author, e.g. `deepseek`) |
+| `provider` | attr `trace.metadata.openrouter.provider_name` (who actually served it, e.g. `Novita`) |
+| `provider_slug` | attr `trace.metadata.openrouter.provider_slug` (may include a deployment-variant suffix: quantization `novita/fp8`, `deepinfra/fp4`, region `amazon-bedrock/global` — or none, e.g. `openai`) |
+| `input_tokens` | attr `gen_ai.usage.input_tokens` |
+| `output_tokens` | attr `gen_ai.usage.output_tokens` (**includes** reasoning tokens) |
+| `cached_tokens` | attr `gen_ai.usage.input_tokens.cached` |
+| `reasoning_tokens` | attr `gen_ai.usage.output_tokens.reasoning` |
+| `cost_usd` | attr `gen_ai.usage.total_cost` |
+| `input_cost_usd` | attr `gen_ai.usage.input_cost` |
+| `output_cost_usd` | attr `gen_ai.usage.output_cost` |
+| `input_unit_price` | attr `trace.metadata.openrouter.input_unit_price` (USD per input token, as quoted) |
+| `output_unit_price` | attr `trace.metadata.openrouter.output_unit_price` |
+| `requested_at` | `span.startTimeUnixNano` — arrives as a **string** (nanosecond epochs exceed JS 2⁵³), parse via `BigInt`, store as `timestamptz` |
+| `duration_ms` | `(endTimeUnixNano − startTimeUnixNano) / 1e6` |
 
 ```sql
--- Per-request rows from Broadcast. Only ever holds ~3 days of data
--- (pruned by sync-analytics); serves "today" and the pre-sync gap.
 create table requests (
-  id            bigint generated always as identity primary key,
-  trace_id      text not null,            -- OTLP trace id (idempotency key)
-  span_id       text not null,
-  model         text not null,            -- e.g. "anthropic/claude-sonnet-5"
-  provider      text,                     -- upstream provider if present
-  input_tokens  integer not null default 0,
-  output_tokens integer not null default 0,
-  cost_usd      numeric(12, 8) not null default 0,
-  requested_at  timestamptz not null,     -- span START time (bucketing key)
-  duration_ms   integer,
-  inserted_at   timestamptz not null default now(),
-  unique (trace_id, span_id)              -- dedupe on webhook redelivery
+  id                bigint generated always as identity primary key,
+  trace_id          text not null,
+  span_id           text not null,
+  model             text not null,             -- UI grouping key (alias slug)
+  author            text,                      -- model author ("deepseek")
+  provider          text,                      -- routed provider ("Novita")
+  provider_slug     text,                      -- incl. quantization ("novita/fp8")
+  input_tokens      integer not null default 0,
+  output_tokens     integer not null default 0,   -- includes reasoning tokens
+  cached_tokens     integer,
+  reasoning_tokens  integer,
+  cost_usd          numeric(12, 8) not null default 0,
+  input_cost_usd    numeric(12, 8),
+  output_cost_usd   numeric(12, 8),
+  input_unit_price  numeric,                   -- unconstrained: rates go as low as ~1e-8
+  output_unit_price numeric,
+  requested_at      timestamptz not null,      -- span START time (bucketing key)
+  duration_ms       integer,
+  inserted_at       timestamptz not null default now(),
+  unique (trace_id, span_id)                   -- dedupe on webhook redelivery
 );
 create index requests_requested_at_idx on requests (requested_at desc);
 create index requests_model_time_idx on requests (model, requested_at desc);
 
--- Authoritative daily aggregates from OpenRouter /api/v1/activity.
--- Upserted daily by sync-analytics; rows are kept forever (the API only
--- exposes 30 days — deleted rows would be unrecoverable; storage is
--- trivial and old rows enable future >30-day views).
-create table analytics_daily (
-  day             date not null,          -- completed UTC day
-  model           text not null,
-  input_tokens    bigint not null default 0,
-  output_tokens   bigint not null default 0,
-  reasoning_tokens bigint,                -- nullable; confirm vs fixtures
-  cost_usd        numeric(12, 8) not null default 0,
-  request_count   integer not null default 0,
-  updated_at      timestamptz not null default now(),
-  primary key (day, model)
-);
-
--- Single read surface for frontends. Precedence: for each UTC day, the
--- analytics row wins if present; otherwise broadcast rows are aggregated.
--- Never sums both sources for the same day → no double counting.
--- security_invoker makes the view enforce the underlying tables' RLS.
+-- Single read surface for frontends: per-day, per-model aggregates.
+-- security_invoker makes the view enforce the underlying table's RLS.
 create view usage_daily with (security_invoker = true) as
-select day, model, input_tokens, output_tokens, cost_usd, request_count,
-       'analytics' as source
-from analytics_daily
-union all
 select (requested_at at time zone 'utc')::date as day,
        model,
-       sum(input_tokens), sum(output_tokens), sum(cost_usd), count(*),
-       'broadcast'
+       sum(input_tokens)  as input_tokens,
+       sum(output_tokens) as output_tokens,
+       sum(cost_usd)      as cost_usd,
+       count(*)           as request_count
 from requests
-where (requested_at at time zone 'utc')::date
-      not in (select day from analytics_daily)
 group by 1, 2;
+
+-- Retention: the app never looks back more than 30 days (older stats live
+-- in the OpenRouter dashboard). Monthly prune; between runs the table may
+-- hold up to ~60 days of rows — harmless, the view/window queries are
+-- time-bounded anyway.
+select cron.schedule(
+  'burnbar-prune-requests',
+  '0 3 1 * *',   -- 03:00 UTC on the 1st of each month
+  $$ delete from public.requests
+     where requested_at < now() - interval '30 days' $$
+);
 ```
 
+- **Nullable vs. `default 0` is deliberate:** `NULL` means "the payload
+  did not report this attribute", `0` means "reported as zero". The
+  not-null core columns (`model`, tokens, cost, `requested_at`) double as
+  the parser's validation contract — missing those → log + skip the
+  span; missing a nullable column → insert anyway.
 - Frontends query `usage_daily` via PostgREST on open / manual refresh /
   timeframe switch (≤30 days × models rows — aggregate client-side), then
   layer Realtime `requests` INSERT events on top in memory. A refresh
@@ -146,22 +180,29 @@ group by 1, 2;
   subscription is on the table). Payload is one row — satisfies the
   "minimal WebSocket payload" requirement from the README. Per-request
   events also drive the accent1/accent2 highlight UX.
-- Retention: `requests` pruned to 3 days by `sync-analytics` (buffer for
-  the pre-sync gap and failed runs); `analytics_daily` never pruned.
+- Rich columns (`provider*`, `cached_tokens`, unit prices, split costs)
+  are not surfaced in MVP UI; they accumulate for future stats views
+  (e.g. average resolved cost per model, cache hit rate) within the
+  30-day window.
 
 ## 5. Configuration & Secrets
 
 | Name | Where | Purpose |
 |---|---|---|
-| `BURNBAR_WEBHOOK_SECRET` | Supabase Edge Function secret + OpenRouter Broadcast custom header | Authenticates webhook calls |
-| `OPENROUTER_MANAGEMENT_KEY` | Supabase Edge Function secret **only** — never in frontends | `sync-analytics` reads `/api/v1/activity`. Management keys can create/delete API keys, so they stay server-side (one copy, smallest blast radius) |
-| `OPENROUTER_API_KEY` | Frontend-local only (Keychain on macOS; config file `~/.config/burnbar/config.toml` for TUI) | Credits polling from frontends |
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Frontend-local config | Realtime + PostgREST access |
+| `BURNBAR_WEBHOOK_SECRET` | Supabase Edge Function secret + OpenRouter Broadcast custom header (`X-Burnbar-Secret`) + local `.env` | Authenticates webhook calls — the function URL is public (`verify_jwt = false` in `supabase/config.toml`), the secret is the sole gate |
+| `OPENROUTER_API_KEY` | Frontend-local only (Keychain on macOS; config file `~/.config/burnbar/config.toml` for TUI; `.env` for dev scripts) | Credits polling + `scripts/test-request.sh` |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Frontend-local config + `.env` | Realtime + PostgREST access |
 
-RLS: since this is single-user and the anon key only ever lives on the
-user's own machines, enable RLS with a permissive read-only policy for
-`anon` on `requests` (no insert/update — writes go through the service
-role inside edge functions). Cheap defense-in-depth.
+No OpenRouter **management key** exists anywhere in the system — the
+analytics sync that needed it was removed (see Decision Log 2026-07-05).
+If the optional audit script (Phase 3) is ever built, it would take a
+management key as a runtime argument locally, never stored.
+
+`.env.example` (committed) documents every variable; the real `.env` is
+gitignored. RLS: single-user project, so enable RLS with a permissive
+read-only policy for `anon` on `requests` (no insert/update — writes go
+through the service role inside the edge function). Cheap
+defense-in-depth.
 
 ## 6. Repository Layout
 
@@ -170,13 +211,14 @@ burnbar/
 ├── README.md
 ├── SPEC.md
 ├── LICENSE                    (MIT)
+├── .env.example               (committed template; real .env gitignored)
 ├── docs/
 │   └── SETUP.md               (self-host walkthrough)
 ├── supabase/
+│   ├── config.toml            (incl. [functions.ingest] verify_jwt = false)
 │   ├── migrations/
 │   ├── functions/
-│   │   ├── ingest/            (webhook receiver + OTLP parser)
-│   │   └── sync-analytics/    (daily analytics upsert + broadcast pruning)
+│   │   └── ingest/            (webhook receiver + OTLP parser)
 │   └── tests/fixtures/        (captured real Broadcast payloads)
 ├── scripts/
 │   └── test-request.sh        (fire a cheap OpenRouter request for manual testing)
@@ -189,23 +231,27 @@ burnbar/
 ## 7. Phases & Checklists
 
 ### Phase 0 — Scaffolding
-- [ ] `git init` + push public repo to GitHub via `gh` (user-run)
+- [x] `git init` + push public repo to GitHub via `gh` (user-run)
 - [x] `.gitignore` (env files, `.DS_Store`, Go/Xcode artifacts, `supabase/.temp`)
 - [x] MIT `LICENSE`
 - [x] Repo layout as in §6 (empty dirs with `.gitkeep` where needed)
 - [x] `scripts/test-request.sh` — manual-test helper that fires a cheap OpenRouter request (model slug overridable per invocation, for capturing payloads from different models)
-- [ ] Create Supabase **cloud** project (dashboard, user-run) + `supabase init` + `supabase link` — cloud-first because Broadcast requires a public destination URL (see Decision Log 2026-07-04); local `supabase start` (Docker) is optional and only needed for local parser testing later
-- [ ] Initial commit
+- [x] Create Supabase **cloud** project (dashboard, user-run) + `supabase init` + `supabase link` — cloud-first because Broadcast requires a public destination URL (see Decision Log 2026-07-04); local `supabase start` (Docker) is optional and only needed for local parser testing later
+- [x] Initial commit
 
 ### Phase 1 — Backend ingest pipeline
-- [ ] Migration: `requests` + `analytics_daily` tables, `usage_daily` view, indexes, RLS policies, realtime publication (per §4–§5). The view ships in Phase 1 even though `analytics_daily` stays empty until Phase 3 — it falls back to broadcast rows entirely, so Phase 2 frontends build against the final read surface from day one
-- [ ] `ingest` edge function skeleton: reject non-POST/PUT; verify `BURNBAR_WEBHOOK_SECRET` header; return 2xx for OpenRouter's `X-Test-Connection: true` probe (empty payload)
-- [ ] **Capture real Broadcast payloads:** deploy a temporary logging version (log the raw body, insert nothing yet), enable Broadcast on OpenRouter pointing at the deployed cloud function, fire cheap requests via `scripts/test-request.sh` against **2–3 different models/providers**, save the raw OTLP JSON files to `supabase/tests/fixtures/`. Compare shapes across models — consistency (or lack of it) drives the table shape and parsing logic. Document the exact attribute→column field mapping in a comment block in the parser. *(The OTLP attribute names are not fully documented; the fixtures are the source of truth.)*
-- [ ] OTLP parser as a pure function: `parseTrace(otlpJson) -> RequestRow[]` (a payload's `resourceSpans` may contain multiple spans); tolerant of unknown/missing attributes (log + skip, never 5xx on partial data)
-- [ ] Insert with `on conflict (trace_id, span_id) do nothing` (idempotent redelivery)
-- [ ] Deno unit tests for the parser against the fixture (happy path, missing cost, multi-span, empty payload)
-- [ ] Deploy to a real Supabase project; configure Broadcast (Privacy Mode ON, secret header); verify end-to-end: OpenRouter request → row visible in table within seconds
-- [ ] Verify a psql/Studio realtime subscription receives the INSERT event
+- [x] `.env.example` + `.env` scaffolding (all variables documented; `.env` verified gitignored)
+- [x] `ingest` edge function skeleton: reject non-POST/PUT; verify `X-Burnbar-Secret` header against `BURNBAR_WEBHOOK_SECRET` (constant-time compare); return 2xx for OpenRouter's `X-Test-Connection: true` probe; `verify_jwt = false` via config.toml
+- [x] Deploy log-only version (logs raw body + byte length, inserts nothing); curl smoke tests pass (405 / 401 / 401 / probe 200 / 200)
+- [x] Configure Broadcast on OpenRouter (Privacy Mode ON, `X-Burnbar-Secret` header); delivery verified end-to-end in function logs
+- [x] Capture first real Broadcast payload → `supabase/tests/fixtures/deepseek-v4-flash.json`; attribute→column mapping documented in §4 *(payload confirmed complete in logs — byte count matches content-length; no scratch table needed)*
+- [x] Capture remaining fixtures (qwen, kimi, claude-haiku, gpt-mini) and diff shapes — **§4 mapping confirmed across all 5 models/providers**: every mapped attribute present everywhere. Optional attrs DO vary outside our mapping (`input_tokens.audio` absent for OpenAI/Anthropic; `output_tokens.image` OpenAI-only) — validates the tolerant parser + nullable columns. Kimi fixture proves cache discounts make `unit_price × tokens ≠ actual cost` (split-cost columns justified). Anthropic cache-*write* attribute unobserved (no cache-write traffic in fixture) — unknown, tolerated by design
+- [ ] Migration: `requests` table, `usage_daily` view, indexes, RLS policies, realtime publication, pg_cron prune schedule (per §4–§5); `supabase db push`
+- [ ] OTLP parser as a pure function: `parseTrace(otlpJson) -> RequestRow[]` (a payload's `resourceSpans` may contain multiple spans); tolerant of unknown/missing attributes (log + skip only when a not-null column is missing, never 5xx on partial data); mapping comment block kept in sync with §4
+- [ ] Replace log-only body: insert with `on conflict (trace_id, span_id) do nothing` (idempotent redelivery); keep payload logging until e2e verified
+- [ ] Deno unit tests for the parser against the fixtures (happy path per model, missing cost, multi-span, empty payload, missing nullable attrs)
+- [ ] Deploy; verify end-to-end: OpenRouter request → correct row in `requests` within seconds
+- [ ] Verify a realtime subscription receives the INSERT event
 
 **Definition of done:** making an OpenRouter request results in a correct
 row and a realtime event, with tests passing via `supabase functions serve`
@@ -228,12 +274,15 @@ locally.
 request, watch the bar animate within seconds. This is the weekend-MVP
 finish line together with Phase 1.
 
-### Phase 3 — Analytics sync
-- [ ] `sync-analytics` edge function: fetch the **full 30-day window** from `GET /api/v1/activity` (management key), upsert every row into `analytics_daily` on `(day, model)`, then prune `requests` rows older than 3 days
-- [ ] Stateless and idempotent by design — **no retry or catch-up logic.** Every run is a complete repair: a missed/failed run, a too-early fetch, or late-completing requests are all fixed by the next run, and until then the `usage_daily` view keeps serving affected days from broadcast rows
-- [ ] Schedule daily at 01:00 UTC via Supabase Cron (docs recommend waiting ~30 min after the UTC boundary; we double it)
-- [ ] Log a warning (observability only) if the response lacks a row set for yesterday
-- [ ] Unit tests: response→row mapping, empty response, overwrite-on-upsert, pruning boundary
+### Phase 3 — Optional audit tooling (post-MVP, may never be needed)
+The daily analytics sync this phase originally held was removed (Decision
+Log 2026-07-05). Retention shipped as a pg_cron statement in the Phase 1
+migration. What remains here is strictly optional observability:
+- [ ] Local audit script (not deployed): fetch `GET /api/v1/activity`
+  (management key passed as an argument, never stored) and compare 30-day
+  per-model totals against `usage_daily`; report drift %, write nothing.
+  Only worth building if broadcast losses turn out to be noticeable in
+  practice.
 
 ### Phase 4 — macOS menubar app (core product)
 - [ ] Xcode project in `macos/`: SwiftUI `MenuBarExtra` (window style), macOS 14+
@@ -246,9 +295,9 @@ finish line together with Phase 1.
 - [ ] Build/run instructions for people cloning the repo (unsigned local builds); code signing & notarization deferred (see Risks)
 
 ### Phase 5 — Self-host docs & release polish
-- [ ] `docs/SETUP.md`: create Supabase project → run migrations → deploy functions → set secrets → configure OpenRouter Broadcast (Privacy Mode, header) → configure frontends. Target: a stranger completes it in <15 minutes.
+- [ ] `docs/SETUP.md`: create Supabase project → link → `db push` → deploy `ingest` → set webhook secret → configure OpenRouter Broadcast (Privacy Mode, header) → configure frontends. Target: a stranger completes it in <15 minutes. (No management key anywhere in setup.)
 - [ ] `justfile` (or Makefile) for common tasks: db reset, deploy, test, build TUI
-- [ ] TUI release builds (goreleaser: darwin/linux/windows) 
+- [ ] TUI release builds (goreleaser: darwin/linux/windows)
 - [ ] README final pass: screenshots/GIF of both frontends
 - [ ] Decide macOS distribution: unsigned build vs. $99/yr Apple Developer notarization (user decision — ask, don't assume)
 
@@ -256,29 +305,25 @@ finish line together with Phase 1.
 
 ## 8. Risks & Open Questions
 
-- **OTLP schema is under-documented.** Exact attribute names for tokens/
-  cost are confirmed only by the captured fixture (Phase 1). OpenRouter may
-  change them; the parser must fail soft and the fixture must be kept
-  current.
-- **No Broadcast delivery guarantees.** OpenRouter documents no retries.
-  Under the source-split model this only affects *today's* numbers, which
-  are explicitly best-effort and become authoritative the next day when
-  the analytics row lands. Acceptable for a spend-awareness tool.
-- **Analytics availability timing.** Docs recommend waiting ~30 min after
-  the UTC boundary (aggregation is by request start time; long-running
-  requests trickle in). We sync at 01:00 UTC. If a run fires too early or
-  fails, the view falls back to broadcast rows for that day (3-day
-  retention buffer) and the next run repairs everything (full-window
-  upsert). No push notification for analytics availability exists.
-- **Reasoning tokens.** `/api/v1/activity` reports them separately;
-  whether the Broadcast OTLP payload does too is unknown until fixtures
-  are captured. `analytics_daily.reasoning_tokens` is nullable pending
-  that.
+- **Broadcast delivery is best-effort and losses are silent.** OpenRouter
+  documents no retries; a 5xx/timeout on our side or an outage on either
+  side loses rows permanently, and a paused free-tier Supabase project
+  would eat a multi-day hole. **Accepted by design** (Decision Log
+  2026-07-05): Burnbar is a live meter; the credits balance and the
+  OpenRouter dashboard are the financial ground truth. The Phase 3 audit
+  script is the escape hatch if losses prove noticeable.
+- **OTLP schema is under-documented.** The attribute mapping in §4 is
+  confirmed by captured fixtures, not documentation. OpenRouter may
+  change attribute names; the parser must fail soft (skip + log, never
+  5xx) and fixtures must be kept current. Cross-provider shape
+  consistency still being verified (4 fixtures pending).
+- **Storage growth vs. free tier.** ~30–60 days of raw rows retained
+  (monthly prune). Even heavy agentic use (~5k requests/day) stays around
+  tens of MB — comfortably inside the 500MB free tier. If someone's usage
+  breaks this assumption, tighten the cron to weekly; no schema change
+  needed.
 - **`realtime-go` maturity.** Community-maintained; the 2s-polling
   fallback is pre-approved (Phase 2) if it misbehaves.
-- **`/api/v1/activity` needs a management key** (separate from inference
-  keys) and covers completed UTC days only. Setup docs must walk through
-  creating one.
 - **Credits endpoint staleness.** OpenRouter caches credit values up to
   ~60s; the balance display should not promise more freshness than that.
 - **macOS distribution.** Unsigned apps trigger Gatekeeper warnings;
@@ -293,12 +338,15 @@ finish line together with Phase 1.
 | 2026-07-03 | macOS menubar app is the core product | Primary daily-driver for the maintainer; TUI remains the cross-platform alternative |
 | 2026-07-03 | Privacy Mode required in setup | Burnbar never needs prompt/completion content; trust win |
 | 2026-07-03 | Credits polled from frontends, not backend | Keeps user's inference key off the server entirely |
-| 2026-07-03 | Reconciliation writes correction rows, not updates | Auditability; broadcast data stays immutable |
+| 2026-07-03 | ~~Reconciliation writes correction rows, not updates~~ | Superseded 2026-07-04 (source-split), then removed entirely 2026-07-05 (broadcast-only) |
 | 2026-07-04 | Cloud-first Supabase workflow; local stack optional | Broadcast requires a publicly reachable destination, so fixtures/e2e verification must run against the deployed cloud function. Repo remains source of truth: schema ships via `supabase db push`, functions via `supabase functions deploy`. Local Docker stack only for offline parser tests |
-| 2026-07-04 | Source-split replaces diff-based reconciliation | Past UTC days from `analytics_daily` (authoritative), today from broadcast `requests`; merged by `usage_daily` view with analytics-wins precedence. Kills diffing, correction rows, and `reconciliation_runs`; per-day single-source makes double counting structurally impossible |
-| 2026-07-04 | Sync = daily 01:00 UTC, full-30-day-window upsert (not yesterday-only insert) | Every run is a complete repair: missed runs, early fetches, and late-completing requests self-heal without retry/catch-up state. Yesterday-only insert would leave permanent holes on failure |
-| 2026-07-04 | `analytics_daily` rows kept forever | The API only exposes 30 days — deleted rows are unrecoverable. Storage is trivial (~thousands of rows/yr); preserves the option of >30-day views |
-| 2026-07-04 | Management key stays server-side (Edge Function secret only) | It can create/delete API keys — far more dangerous than an inference key. One copy on the server beats a copy per frontend device |
-| 2026-07-04 | Day bucketing = request **start** time, UTC, in both sources | Matches `/api/v1/activity` semantics; a request straddling midnight lands in the same day in both sources, so totals converge |
+| 2026-07-04 | ~~Source-split replaces diff-based reconciliation~~ | Superseded 2026-07-05 by broadcast-only — kept for history: past days from `analytics_daily`, today from broadcast, merged by view |
+| 2026-07-04 | ~~Sync = daily 01:00 UTC full-window upsert~~ / ~~`analytics_daily` kept forever~~ / ~~Management key server-side only~~ | All superseded 2026-07-05: the analytics sync, its table, and the management key were removed from the system entirely |
+| 2026-07-04 | Day bucketing = request **start** time, UTC | `requested_at` = OTLP span start; matches OpenRouter dashboard bucketing |
 | 2026-07-04 | macOS app: in-memory state only, no SQLite/GRDB | 30-day dataset is a few KB of daily aggregates; fetch-on-launch is sub-second. Removes a dependency and a cache-invalidation layer. JSON snapshot cache is the pre-approved polish fallback |
 | 2026-07-04 | Credits: display polled value as-is, 60s interval; no optimistic local decrement | OpenRouter caches credit values up to ~60s, so polling faster can't beat that floor, and subtracting broadcast costs from a stale anchor causes visible bounce-up artifacts. Worst-case display lag ≈ cache TTL + poll interval (~2 min) is acceptable — the usage bars, not the balance, are the real-time surface. Event-triggered debounced re-poll (~60–70s after a realtime event) is the pre-approved polish if fresher balance is wanted |
+| 2026-07-05 | **Broadcast-only architecture**: dropped `analytics_daily`, `sync-analytics`, and the management key; `requests` is the single source of truth | First captured fixture proved broadcast is far richer than `/api/v1/activity` (provider slug w/ quantization, cached tokens, split costs, unit prices, per-request timing) — deleting broadcast rows in favor of analytics would discard unrecoverable data. Reconciliation can't bridge the shape mismatch (analytics lacks the rich columns, so "corrections" would corrupt them). Occasional silent loss is acceptable for a live meter: credits balance + OpenRouter dashboard remain the financial ground truth. Removes an entire edge function, a cron'd external dependency, the most dangerous secret, and all merge logic |
+| 2026-07-05 | `requests` captures the full broadcast payload (author, provider, provider_slug, cached/reasoning tokens, split costs, unit prices) | Capture-now-or-never: webhooks can't be backfilled. Metadata columns are nullable (NULL = "not reported", 0 = "reported zero") so stats aren't corrupted when providers omit attributes. Store facts (actual split costs) rather than recompute them — cache discounts make `unit_price × tokens` inexact |
+| 2026-07-05 | Retention: 30 days, pruned by a **monthly pg_cron job** (03:00 UTC on the 1st) | The app's largest window is one month; older stats live in the OpenRouter dashboard. Between monthly runs the table holds up to ~60 days — harmless since all queries are time-bounded. pg_cron keeps retention as one SQL statement inside the migration; no second edge function |
+| 2026-07-05 | `requested_at` stored as `timestamptz` (parser converts OTLP's `startTimeUnixNano` string via `BigInt`) | OTLP serializes nano-epochs as strings (exceeds JS 2⁵³). Postgres-native timestamps buy `::date` bucketing, readable Studio output, natural time-range indexes, and ISO strings over PostgREST/Realtime that Go/Swift parse natively; sub-microsecond precision has no consumer |
+| 2026-07-05 | Analytics endpoints researched (web-verified): `/api/v1/activity` returns per-(date, model, endpoint) rows incl. `provider_name`, `model_permaslug`, `reasoning_tokens`, `byok_usage_inference`; `/api/v1/analytics/query` offers metrics/dimensions (incl. `cache_hit_rate`) but **no provider dimension** and returns count metrics as strings | Documented for the optional Phase 3 audit script. Neither endpoint carries unit prices, split costs, or cached-token counts — confirming broadcast as the richest source |

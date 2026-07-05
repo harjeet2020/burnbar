@@ -25,3 +25,8 @@ macos/**/DerivedData/
 
 # --- Node tooling (if ever needed for edge function dev) ---
 node_modules/
+
+# --- LLMs ---
+.claude/
+CLAUDE.md
+MEMORY.md
