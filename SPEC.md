@@ -129,10 +129,10 @@ create table requests (
   output_tokens     integer not null default 0,   -- includes reasoning tokens
   cached_tokens     integer,
   reasoning_tokens  integer,
-  cost_usd          numeric(12, 8) not null default 0,
-  input_cost_usd    numeric(12, 8),
-  output_cost_usd   numeric(12, 8),
-  input_unit_price  numeric,                   -- unconstrained: rates go as low as ~1e-8
+  cost_usd          numeric not null default 0, -- all money columns unconstrained:
+  input_cost_usd    numeric,                    -- numeric(p,s) silently rounds on
+  output_cost_usd   numeric,                    -- insert; store verbatim instead
+  input_unit_price  numeric,                    -- (rates go as low as ~1e-8)
   output_unit_price numeric,
   requested_at      timestamptz not null,      -- span START time (bucketing key)
   duration_ms       integer,
@@ -142,22 +142,42 @@ create table requests (
 create index requests_requested_at_idx on requests (requested_at desc);
 create index requests_model_time_idx on requests (model, requested_at desc);
 
--- Single read surface for frontends: per-day, per-model aggregates.
+-- Single read surface for frontends: per-day, per-model, PER-PROVIDER
+-- aggregates. Grain includes provider_slug because OpenRouter routes one
+-- model across providers with different rates — the split powers the
+-- details screen (MVP). ADDITIVE SUMS ONLY: averages/percentages don't
+-- compose across days (weighting), so ratios are always derived
+-- client-side from these sums at the selected window (cache % =
+-- cached/input, effective input rate = input_cost/input_tokens, avg
+-- duration = duration_ms_sum/timed_request_count, provider share =
+-- provider row / model total). Live bars select the narrow columns and
+-- sum across provider rows; the details screen selects everything.
 -- security_invoker makes the view enforce the underlying table's RLS.
 create view usage_daily with (security_invoker = true) as
 select (requested_at at time zone 'utc')::date as day,
        model,
-       sum(input_tokens)  as input_tokens,
-       sum(output_tokens) as output_tokens,
-       sum(cost_usd)      as cost_usd,
-       count(*)           as request_count
+       provider_slug,
+       count(*)              as request_count,
+       sum(input_tokens)     as input_tokens,
+       sum(output_tokens)    as output_tokens,
+       sum(cached_tokens)    as cached_tokens,
+       sum(reasoning_tokens) as reasoning_tokens,
+       sum(cost_usd)         as cost_usd,
+       sum(input_cost_usd)   as input_cost_usd,
+       sum(output_cost_usd)  as output_cost_usd,
+       sum(duration_ms)      as duration_ms_sum,
+       count(duration_ms)    as timed_request_count
 from requests
-group by 1, 2;
+group by 1, 2, 3;
 
 -- Retention: the app never looks back more than 30 days (older stats live
 -- in the OpenRouter dashboard). Monthly prune; between runs the table may
 -- hold up to ~60 days of rows — harmless, the view/window queries are
--- time-bounded anyway.
+-- time-bounded anyway. pg_cron ships with Supabase but is not enabled by
+-- default — the migration must create the extension itself so self-hosters
+-- never touch the dashboard.
+create extension if not exists pg_cron;
+
 select cron.schedule(
   'burnbar-prune-requests',
   '0 3 1 * *',   -- 03:00 UTC on the 1st of each month
@@ -172,18 +192,24 @@ select cron.schedule(
   the parser's validation contract — missing those → log + skip the
   span; missing a nullable column → insert anyway.
 - Frontends query `usage_daily` via PostgREST on open / manual refresh /
-  timeframe switch (≤30 days × models rows — aggregate client-side), then
-  layer Realtime `requests` INSERT events on top in memory. A refresh
-  discards the in-memory deltas and re-baselines from the view.
+  timeframe switch (≤30 days × models × providers-per-model rows, still a
+  few KB — sum across provider rows and aggregate over the window
+  client-side), then layer Realtime `requests` INSERT events on top in
+  memory. A refresh discards the in-memory deltas and re-baselines from
+  the view.
 - Realtime: enable the `supabase_realtime` publication for `requests`
   (INSERT events only; views cannot be subscribed to — by design the
   subscription is on the table). Payload is one row — satisfies the
   "minimal WebSocket payload" requirement from the README. Per-request
   events also drive the accent1/accent2 highlight UX.
-- Rich columns (`provider*`, `cached_tokens`, unit prices, split costs)
-  are not surfaced in MVP UI; they accumulate for future stats views
-  (e.g. average resolved cost per model, cache hit rate) within the
-  30-day window.
+- Rich data (provider split, cached/reasoning tokens, effective rates,
+  durations) is surfaced in the **details screen — in MVP scope**: hover
+  on a bar shows the basics (input/output tokens, cost), opening a bar
+  shows the full per-model breakdown for the selected window, all derived
+  client-side from `usage_daily` sums. Design specced when UI work starts
+  (the README UI/UX contract gets extended then). The raw unit-price
+  columns stay unsurfaced for now — effective rates (cost/tokens) are the
+  more truthful display since they reflect cache discounts received.
 
 ## 5. Configuration & Secrets
 
@@ -246,24 +272,27 @@ burnbar/
 - [x] Configure Broadcast on OpenRouter (Privacy Mode ON, `X-Burnbar-Secret` header); delivery verified end-to-end in function logs
 - [x] Capture first real Broadcast payload → `supabase/tests/fixtures/deepseek-v4-flash.json`; attribute→column mapping documented in §4 *(payload confirmed complete in logs — byte count matches content-length; no scratch table needed)*
 - [x] Capture remaining fixtures (qwen, kimi, claude-haiku, gpt-mini) and diff shapes — **§4 mapping confirmed across all 5 models/providers**: every mapped attribute present everywhere. Optional attrs DO vary outside our mapping (`input_tokens.audio` absent for OpenAI/Anthropic; `output_tokens.image` OpenAI-only) — validates the tolerant parser + nullable columns. Kimi fixture proves cache discounts make `unit_price × tokens ≠ actual cost` (split-cost columns justified). Anthropic cache-*write* attribute unobserved (no cache-write traffic in fixture) — unknown, tolerated by design
-- [ ] Migration: `requests` table, `usage_daily` view, indexes, RLS policies, realtime publication, pg_cron prune schedule (per §4–§5); `supabase db push`
-- [ ] OTLP parser as a pure function: `parseTrace(otlpJson) -> RequestRow[]` (a payload's `resourceSpans` may contain multiple spans); tolerant of unknown/missing attributes (log + skip only when a not-null column is missing, never 5xx on partial data); mapping comment block kept in sync with §4
-- [ ] Replace log-only body: insert with `on conflict (trace_id, span_id) do nothing` (idempotent redelivery); keep payload logging until e2e verified
-- [ ] Deno unit tests for the parser against the fixtures (happy path per model, missing cost, multi-span, empty payload, missing nullable attrs)
-- [ ] Deploy; verify end-to-end: OpenRouter request → correct row in `requests` within seconds
-- [ ] Verify a realtime subscription receives the INSERT event
+- [x] Migration: `requests` table, `usage_daily` view, indexes, RLS policies, realtime publication, pg_cron prune schedule (per §4–§5); `supabase db push` — `20260705163715_create_requests.sql`, pushed (user-run; agent shell has no CLI token). Verified via PostgREST: table + view readable as anon, anon INSERT rejected by RLS (42501). Push printed a non-fatal `pg-delta` catalog-cache warning (CLI-internal; migration applied fine)
+- [x] OTLP parser as a pure function: `parseTrace(otlpJson) -> RequestRow[]` (a payload's `resourceSpans` may contain multiple spans); tolerant of unknown/missing attributes (log + skip only when a not-null column is missing, never 5xx on partial data); mapping comment block kept in sync with §4 — `functions/ingest/parse.ts`; numeric coercion accepts both OTLP int encodings (fixtures use JSON numbers, canonical OTLP uses strings)
+- [x] Replace log-only body: insert with `on conflict (trace_id, span_id) do nothing` (idempotent redelivery; via PostgREST `upsert` + `ignoreDuplicates`); keep payload logging until e2e verified. Status-code contract: partial/malformed data → 200 (parse what we can, log skips, never 5xx); **total** DB failure (e.g. paused project) → 500 — purely for log visibility, since OpenRouter doesn't retry either way. *Code done + typechecked; deploy pending below*
+- [x] Deno unit tests for the parser against the fixtures (happy path per model, missing cost, multi-span, empty payload, missing nullable attrs) — `deno test --allow-read supabase/functions/ingest/`; 7 tests / all 5 fixtures green, incl. exact-value mapping for deepseek and string-encoded int64 tolerance
+- [x] Deploy; verify end-to-end: OpenRouter request → correct row in `requests` within seconds — deployed (user-run); `test-request.sh` → row landed ~3s after completion, every column populated correctly (incl. split costs matching OpenRouter's response `cost_details` exactly); `usage_daily` aggregates it correctly at the (day, model, provider_slug) grain
+- [x] Verify a realtime subscription receives the INSERT event — anon-role Deno subscriber received the full row via `postgres_changes` INSERT (subscribe-first order works); bonus finding: the verify request routed to Fireworks while the fixture went to Novita — live proof of the provider-variance rationale for the view grain
+- [x] Remove the verbose raw-body logging from `ingest` once e2e is verified (full payloads shouldn't accumulate in function logs indefinitely; keep the one-line summary log) — *code edited; needs one final `supabase functions deploy ingest` (user-run)*
 
 **Definition of done:** making an OpenRouter request results in a correct
-row and a realtime event, with tests passing via `supabase functions serve`
-locally.
+row and a realtime event, with parser tests passing via plain `deno test`
+(pure function — no local Supabase stack needed; `supabase functions serve`
+is only for manually exercising the handler locally).
 
 ### Phase 2 — Go TUI (first frontend, MVP target)
 - [ ] Go module scaffold in `tui/`; Bubble Tea program with Elm-architecture layout (model/update/view split into files)
 - [ ] Config loading: `~/.config/burnbar/config.toml` + env-var overrides (Supabase URL/anon key, OpenRouter key)
-- [ ] Initial data load: PostgREST query on the `usage_daily` view; aggregate per-model over the active window client-side (day default). Same query on manual refresh / timeframe switch, discarding in-memory realtime deltas
+- [ ] Initial data load: PostgREST query on the `usage_daily` view; aggregate per-model over the active window client-side (day default). Same query on manual refresh / timeframe switch, discarding in-memory realtime deltas. **Order matters: subscribe to realtime first, then fetch the baseline** — a row landing mid-fetch is briefly double-counted and self-heals on the next refresh, whereas fetch-first silently undercounts until then (applies to both frontends)
 - [ ] Live updates: subscribe to `requests` INSERTs via Supabase Realtime. **Try `supabase-community/realtime-go` first; if it proves unreliable (community-maintained — see Risks), fall back to polling PostgREST every 2s for rows newer than the last seen `inserted_at`** — still within the 1–5s latency budget. Record the outcome in the Decision Log.
 - [ ] Credits: poll `GET /api/v1/credits` every 60s; show balance in header. Display the polled value as-is — no local computation from broadcast costs (stale-anchor bounce; see Decision Log). Optional polish (pre-approved, both frontends): on a realtime event, schedule one debounced extra poll ~60–70s later to catch the refreshed cache right after spend happens — better than shortening the blind interval. Rate limits are a non-issue (no documented caps on metadata endpoints; 60s polling ≈ 2 req/min across two clients)
 - [ ] Bars UI (per README UI/UX contract): one bar per model, sorted by usage desc, proportional widths, input/output tokens + spend labels; accent1 = usage since app start, accent2 = most recent request
+- [ ] Model details screen (**MVP scope**, design TBD when UI work starts): opened from a bar; shows for the selected window: cached/reasoning token counts + %, effective input/output rates, avg request duration, per-provider split with per-provider rates — all derived client-side from `usage_daily` sums (see §4)
 - [ ] Timeframe switching (keys `d` / `w` / `m`) triggering a re-fetch
 - [ ] Footer: last request time + last sync time
 - [ ] Animations: Harmonica springs for bar-width transitions and new-request highlight decay
@@ -350,3 +379,6 @@ migration. What remains here is strictly optional observability:
 | 2026-07-05 | Retention: 30 days, pruned by a **monthly pg_cron job** (03:00 UTC on the 1st) | The app's largest window is one month; older stats live in the OpenRouter dashboard. Between monthly runs the table holds up to ~60 days — harmless since all queries are time-bounded. pg_cron keeps retention as one SQL statement inside the migration; no second edge function |
 | 2026-07-05 | `requested_at` stored as `timestamptz` (parser converts OTLP's `startTimeUnixNano` string via `BigInt`) | OTLP serializes nano-epochs as strings (exceeds JS 2⁵³). Postgres-native timestamps buy `::date` bucketing, readable Studio output, natural time-range indexes, and ISO strings over PostgREST/Realtime that Go/Swift parse natively; sub-microsecond precision has no consumer |
 | 2026-07-05 | Analytics endpoints researched (web-verified): `/api/v1/activity` returns per-(date, model, endpoint) rows incl. `provider_name`, `model_permaslug`, `reasoning_tokens`, `byok_usage_inference`; `/api/v1/analytics/query` offers metrics/dimensions (incl. `cache_hit_rate`) but **no provider dimension** and returns count metrics as strings | Documented for the optional Phase 3 audit script. Neither endpoint carries unit prices, split costs, or cached-token counts — confirming broadcast as the richest source |
+| 2026-07-05 | Money columns are unconstrained `numeric` (dropped `numeric(12,8)`) | `numeric(p,s)` silently rounds on insert; unit prices reach ~1e-8/token so tiny requests can exceed 8 decimals. Store payload values verbatim (capture-now-or-never); frontends may use float64 for display aggregation — error is orders of magnitude below display precision |
+| 2026-07-05 | Frontends **subscribe to Realtime before the baseline fetch** | A row landing mid-fetch is briefly double-counted and self-heals on the next refresh; fetch-first would silently undercount until then. For a live meter, brief overcount beats silent undercount |
+| 2026-07-05 | `usage_daily` regrained to (day, model, **provider_slug**) with **additive sums only** (tokens incl. cached/reasoning, split costs, duration sum + timed-request count); model details screen pulled into MVP scope | OpenRouter routes one model across providers with materially different rates, so the per-provider split is real cost signal. Averages/percentages don't compose across days (weighting), so the view ships sums and all ratios (cache %, reasoning %, effective rates, avg duration, provider share) are derived client-side at the selected window. Live bars sum across provider rows (~1–3 per model) — payload stays a few KB. A view stores nothing, so regraining later is free |

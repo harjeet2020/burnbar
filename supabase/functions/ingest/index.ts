@@ -1,29 +1,36 @@
 /**
- * Burnbar `ingest` edge function — **log-only fixture-capture build**.
+ * Burnbar `ingest` edge function — the OpenRouter Broadcast webhook
+ * receiver.
  *
  * @module supabase/functions/ingest
  *
  * @remarks
- * This is the Phase 1 temporary version of the webhook receiver for
- * OpenRouter's Broadcast feature. Its only job is to prove the delivery
- * pipeline (auth, test-connection probe, request handling) and to
- * `console.log` the raw OTLP payload so we can capture real fixtures —
- * OpenRouter's OTLP attribute names are under-documented, so the captured
- * payloads are the source of truth for the `requests` table shape and the
- * parser (see SPEC.md §Phase 1). **It inserts nothing into the database.**
+ * OpenRouter's Broadcast feature POSTs an OTLP JSON trace here after every
+ * completed LLM request. The function authenticates the delivery, parses
+ * it with {@link parseTrace}, and idempotently inserts the resulting rows
+ * into the `requests` table (redeliveries dedupe on `(trace_id, span_id)`).
  *
  * Request lifecycle:
  *   1. Reject any method other than POST/PUT with 405.
  *   2. Verify the shared secret in the `X-Burnbar-Secret` header against
  *      the `BURNBAR_WEBHOOK_SECRET` function secret (constant-time).
  *   3. Answer OpenRouter's `X-Test-Connection: true` probe (sent when the
- *      Broadcast destination is saved) with 200 and an empty-handed log.
- *   4. Log the raw body verbatim for fixture capture and return 200.
+ *      Broadcast destination is saved) with 200.
+ *   4. Parse the OTLP payload and upsert rows with duplicates ignored.
+ *
+ * Status-code contract (SPEC.md Phase 1): partial or malformed data is
+ * **never** a 5xx — parse what we can, log the rest, return 200 (OpenRouter
+ * doesn't retry, so failing loudly buys nothing and a 5xx streak looks like
+ * an outage). Only a *total* database failure (e.g. paused project) returns
+ * 500, purely so it stands out in the function logs.
  *
  * Deployed with JWT verification disabled (`verify_jwt = false` in
  * supabase/config.toml) because OpenRouter cannot send a Supabase JWT —
  * the shared-secret header is the sole authentication mechanism.
  */
+
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { parseTrace } from "./parse.ts";
 
 /** Custom header carrying the shared webhook secret, configured on the OpenRouter Broadcast destination. */
 const SECRET_HEADER = "x-burnbar-secret";
@@ -76,11 +83,41 @@ async function secretsMatch(expected: string, provided: string): Promise<boolean
 }
 
 /**
+ * Lazily-created service-role Supabase client, reused across invocations
+ * of a warm function instance.
+ *
+ * @remarks
+ * The edge runtime auto-injects `SUPABASE_URL` and
+ * `SUPABASE_SERVICE_ROLE_KEY` into every deployed function. The service
+ * role bypasses RLS — which is exactly right here: `requests` only has a
+ * read-only `anon` policy, and this function is the sole writer. The key
+ * never leaves the server.
+ */
+let supabase: SupabaseClient | null = null;
+
+/**
+ * Returns the shared service-role client, creating it on first use.
+ *
+ * @returns The client, or `null` when the runtime env vars are missing
+ *   (only plausible in a misconfigured local run).
+ */
+function getSupabase(): SupabaseClient | null {
+  if (supabase !== null) return supabase;
+  const url = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !serviceRoleKey) return null;
+  supabase = createClient(url, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  return supabase;
+}
+
+/**
  * Handles one incoming webhook delivery (or probe) from OpenRouter.
  *
  * @param req - The incoming HTTP request.
- * @returns 200 on success/probe, 401 on bad secret, 405 on bad method,
- *   500 if the function is deployed without its secret configured.
+ * @returns 200 on success/probe/partial data, 401 on bad secret, 405 on
+ *   bad method, 500 on missing configuration or total database failure.
  */
 async function handleRequest(req: Request): Promise<Response> {
   // OpenRouter Broadcast delivers via POST; PUT is tolerated per spec.
@@ -110,13 +147,52 @@ async function handleRequest(req: Request): Promise<Response> {
     return jsonResponse(200, { ok: true, probe: true });
   }
 
-  // Fixture capture: log the payload verbatim, exactly as received.
-  // The logged length lets us detect log-viewer truncation when copying.
   const rawBody = await req.text();
   console.log(`Received payload: content-type=${req.headers.get("content-type")}, bytes=${rawBody.length}`);
-  console.log(rawBody);
 
-  return jsonResponse(200, { ok: true });
+  // Malformed JSON → acknowledge and log; a 5xx would achieve nothing
+  // (OpenRouter doesn't retry) and partial data must never fail the hook.
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    console.warn("Payload is not valid JSON; nothing to ingest");
+    return jsonResponse(200, { ok: true, parsed: 0, inserted: 0 });
+  }
+
+  const rows = parseTrace(payload);
+  if (rows.length === 0) {
+    console.warn("Payload contained no parseable spans");
+    return jsonResponse(200, { ok: true, parsed: 0, inserted: 0 });
+  }
+
+  const db = getSupabase();
+  if (db === null) {
+    console.error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing; cannot insert");
+    return jsonResponse(500, { error: "server misconfigured" });
+  }
+
+  // Idempotent insert: `ignoreDuplicates` is PostgREST's spelling of
+  // `on conflict (trace_id, span_id) do nothing`, so webhook redelivery
+  // can never double-count.
+  const { error, count } = await db
+    .from("requests")
+    .upsert(rows, {
+      onConflict: "trace_id,span_id",
+      ignoreDuplicates: true,
+      count: "exact",
+    });
+
+  if (error) {
+    // Total DB failure — the one case that returns 5xx, purely for log
+    // visibility (the row is lost either way; broadcast has no retries).
+    console.error(`Insert failed: ${error.message}`);
+    return jsonResponse(500, { error: "insert failed" });
+  }
+
+  const inserted = count ?? rows.length;
+  console.log(`Ingested ${inserted}/${rows.length} span(s) (duplicates ignored)`);
+  return jsonResponse(200, { ok: true, parsed: rows.length, inserted });
 }
 
 Deno.serve(handleRequest);
