@@ -19,13 +19,21 @@ const scaleFloor = 10_000
 // 1–2–5 ladder (10K, 20K, 50K, 100K, …) such that maxTokens ≤ 0.8·S.
 // It is a pure function of the current window's data — no state, no
 // hysteresis (tui/SPEC.md §3).
+// The ladder tops out at the largest 1–2–5 value representable in
+// int64 (5e18): absurd inputs cap there instead of overflowing the walk
+// (BarWidth clamps to the content width anyway, so a capped scale still
+// renders sanely).
 func ScaleFor(maxTokens int64) int64 {
 	s := int64(scaleFloor)
 	// Walk the 1–2–5 ladder: ×2, ×2.5, ×2 repeating (10 → 20 → 50 → 100).
 	steps := []int64{2, 5, 10} // multipliers relative to the decade base
 	base := int64(scaleFloor)
 	for i := 0; float64(maxTokens) > scaleHeadroom*float64(s); i++ {
-		s = base * steps[i%3]
+		next := base * steps[i%3]
+		if next/steps[i%3] != base { // multiplication overflowed int64
+			return s
+		}
+		s = next
 		if i%3 == 2 {
 			base *= 10
 		}
@@ -49,6 +57,58 @@ func BarWidth(width int, tokens, scale int64) int {
 		return width
 	}
 	return cells
+}
+
+// BarGeometry is the cell layout of one bar row (tui/SPEC.md §3/§5).
+// Invariant: Cells = Base + Acc1 + Acc2. InputCells is the input/output
+// glyph boundary measured across the whole bar — accent regions recolor
+// the tail without changing glyphs, so the split stays readable in
+// monochrome.
+type BarGeometry struct {
+	// Cells is the total bar length; 0 means draw nothing.
+	Cells int
+	// InputCells is the glyph boundary: round(SplitFraction·Cells).
+	InputCells int
+	// Base is the un-accented leading region.
+	Base int
+	// Acc1 is the accent.session slice (usage since the anchor).
+	Acc1 int
+	// Acc2 is the accent.latest slice, always rightmost (the newest
+	// usage grows the bar rightward).
+	Acc2 int
+}
+
+// Geometry computes a model's bar layout on the shared scale. Accent
+// slices are token-proportional via the same BarWidth math as the bar
+// itself, then clamped so accents can never exceed the bar:
+// Acc2 ≤ Cells, Acc1 ≤ Cells − Acc2 (tui/SPEC.md §5).
+func Geometry(m ModelStat, width int, scale int64) BarGeometry {
+	cells := BarWidth(width, m.TotalTokens(), scale)
+	if cells == 0 {
+		return BarGeometry{}
+	}
+
+	inputCells := int(math.Round(SplitFraction(m) * float64(cells)))
+	if inputCells > cells {
+		inputCells = cells
+	}
+
+	acc2 := BarWidth(width, m.Accent2Tokens, scale)
+	if acc2 > cells {
+		acc2 = cells
+	}
+	acc1 := BarWidth(width, m.Accent1Tokens, scale)
+	if acc1 > cells-acc2 {
+		acc1 = cells - acc2
+	}
+
+	return BarGeometry{
+		Cells:      cells,
+		InputCells: inputCells,
+		Base:       cells - acc1 - acc2,
+		Acc1:       acc1,
+		Acc2:       acc2,
+	}
 }
 
 // SplitFraction returns the input share of a bar's interior — the

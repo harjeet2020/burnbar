@@ -483,18 +483,40 @@ provisional (written to §3/§9 spec, no tests yet) — Stage B formalizes
 them with its test suite. A details-screen *stub* exists so the
 enter/click-through navigation is real; Stage E replaces its body.
 
-### Stage B — Pure core
-- [ ] Domain types; window math — local today, UTC week/month, both
-  rollovers, DST edge cases
-- [ ] `aggregate()` over baseline + deduped rows with zero-guards,
+### Stage B — Pure core ✅ (2026-07-05)
+- [x] Domain types; window math — local today, UTC week/month, both
+  rollovers, DST edge cases — `rows.go` (RequestRow/DailyRow mirroring
+  the SQL surfaces + RowStore dedupe map with live-wins merge: a live
+  event upgrades a fetched row, a fetched row never overwrites) and
+  `windows.go` (all pure over `(now, loc)`; DST verified incl. the
+  Chile midnight-doesn't-exist case)
+- [x] `aggregate()` over baseline + deduped rows with zero-guards,
   NULL-vs-0 handling, today-from-rows / week-month-from-baseline+live
-  source selection
-- [ ] Bar geometry: 1–2–5 auto-range ladder (0.8 headroom, 10K floor),
+  source selection — `Aggregate(AggregateInput)` (§7's four args plus
+  the accent anchor and local zone the math needs); nullable sums
+  mirror SQL SUM (nil only when every input was nil); ModelStat grew
+  the details-screen sums + `Providers []ProviderStat` grain; ratio
+  methods all return `*float64` (nil → `—`)
+- [x] Bar geometry: 1–2–5 auto-range ladder (0.8 headroom, 10K floor),
   min-width clamp, cost-share segment split with token fallback,
-  token-proportional accent slices
-- [ ] Formatting suite (§9)
-- [ ] `go test` for all of the above — this stage is done when the
-  tests, not the screen, say so
+  token-proportional accent slices — accent-slice math extracted from
+  `ui/meter.go` into `core.Geometry() → BarGeometry`; render parity
+  verified via VHS at 120×35; `ScaleFor` gained an int64-overflow cap
+  (top ladder value 5e18 — the old walk hung on absurd inputs)
+- [x] Formatting suite (§9) — tests caught a real FormatTokens bug:
+  999,949 rendered "1000K" (4 digits); next-unit threshold corrected
+  999.95 → 999.5 (999,500+ → "1M"). FormatAge 30–59 s now rounds up to
+  "1m" (spec was silent; "0m" read as a bug)
+- [x] `go test` for all of the above — 5 test files, ~160 cases, all
+  green (`go vet` + `go build` clean; UI stays on Fixture() until
+  Stage C swaps in Aggregate())
+
+Stage B notes: accent2 = most recent live row by **ReceivedAt**
+(arrival order — §5's long-running-request rationale), accent1 = live
+rows received strictly after the anchor excluding the accent2 row;
+accents exist only inside the active window (an out-of-window newest
+row accents nothing — no fallback). `windows_test.go` imports
+`time/tzdata` so zone tests are hermetic.
 
 ### Stage C — Data
 - [ ] PostgREST baseline fetch (all `usage_daily` columns, 30 days) +

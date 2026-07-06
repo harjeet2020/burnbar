@@ -6,7 +6,6 @@
 package ui
 
 import (
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -168,38 +167,16 @@ func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string
 func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
 	th, g := m.theme, m.glyphs
 
-	cells := core.BarWidth(l.contentW, st.TotalTokens(), scale)
-	if cells == 0 {
+	geo := core.Geometry(st, l.contentW, scale)
+	if geo.Cells == 0 {
 		return ""
 	}
-
-	inputCells := int(math.Round(core.SplitFraction(st) * float64(cells)))
-	if inputCells > cells {
-		inputCells = cells
-	}
-
-	acc2 := 0
-	if st.Accent2Tokens > 0 {
-		acc2 = core.BarWidth(l.contentW, st.Accent2Tokens, scale)
-	}
-	acc1 := 0
-	if st.Accent1Tokens > 0 {
-		acc1 = core.BarWidth(l.contentW, st.Accent1Tokens, scale)
-	}
-	// Accents can never exceed the bar itself.
-	if acc2 > cells {
-		acc2 = cells
-	}
-	if acc1 > cells-acc2 {
-		acc1 = cells - acc2
-	}
-	base := cells - acc1 - acc2
 
 	// The glyph pattern (input vs output) spans the whole bar; accent
 	// regions recolor the tail without changing glyphs, so the split
 	// stays readable in monochrome.
 	glyphAt := func(i int) string {
-		if i < inputCells {
+		if i < geo.InputCells {
 			return g.BarInput
 		}
 		return g.BarOutput
@@ -215,16 +192,16 @@ func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
 		return style.Render(b.String())
 	}
 
-	inputEnd := inputCells
-	if inputEnd > base {
-		inputEnd = base
+	inputEnd := geo.InputCells
+	if inputEnd > geo.Base {
+		inputEnd = geo.Base
 	}
 	var b strings.Builder
 	b.WriteString(" ")
 	b.WriteString(run(0, inputEnd, th.AccentPrimary))
-	b.WriteString(run(inputEnd, base, th.BarOutput))
-	b.WriteString(run(base, base+acc1, th.AccentSession))
-	b.WriteString(run(base+acc1, cells, th.AccentLatest))
+	b.WriteString(run(inputEnd, geo.Base, th.BarOutput))
+	b.WriteString(run(geo.Base, geo.Base+geo.Acc1, th.AccentSession))
+	b.WriteString(run(geo.Base+geo.Acc1, geo.Cells, th.AccentLatest))
 	return b.String()
 }
 

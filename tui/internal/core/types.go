@@ -67,6 +67,42 @@ type ModelStat struct {
 	Accent1Tokens int64
 	// Accent2Tokens are tokens of the single most recent live request.
 	Accent2Tokens int64
+	// CachedTokens, ReasoningTokens, and DurationMSSum are nullable
+	// window sums for the details screen; nil when never reported in
+	// the window (SQL SUM semantics — see DailyRow).
+	CachedTokens    *int64
+	ReasoningTokens *int64
+	DurationMSSum   *int64
+	// TimedRequests counts requests that reported a duration — the
+	// avg-duration denominator (root SPEC §2).
+	TimedRequests int64
+	// Providers is the per-(model, provider_slug) grain for the details
+	// screen's split table, sorted by cost descending (ties slug
+	// ascending, unreported slug last).
+	Providers []ProviderStat
+}
+
+// ProviderStat is one (model, provider_slug) grain row — the details
+// screen's provider split table (tui/SPEC.md §2). Same sums and pointer
+// discipline as ModelStat; Slug is nil when the payload never reported
+// the routed provider (renders "—").
+type ProviderStat struct {
+	// Slug is the routed provider including deployment variant, e.g.
+	// "novita/fp8"; nil when unreported.
+	Slug *string
+	// Requests and the token/cost sums, over the window.
+	Requests     int64
+	InputTokens  int64
+	OutputTokens int64
+	Cost         float64
+	// Nullable sums, as on ModelStat.
+	CachedTokens    *int64
+	ReasoningTokens *int64
+	InputCost       *float64
+	OutputCost      *float64
+	DurationMSSum   *int64
+	// TimedRequests counts requests that reported a duration.
+	TimedRequests int64
 }
 
 // TotalTokens is the bar-length driver: input + output (tui/SPEC.md §3).

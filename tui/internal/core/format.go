@@ -32,9 +32,9 @@ func FormatTokens(n int64) string {
 	}
 	for i, u := range units {
 		v := float64(n) / u.div
-		// Values that would round to ≥1000 belong to the next unit up
-		// (999,950 → "1M", not "1000.0K").
-		if v >= 999.95 && i < len(units)-1 {
+		// Values that %.0f would round to ≥1000 belong to the next
+		// unit up (999,500 → "1M", never a 4-digit "1000K").
+		if v >= 999.5 && i < len(units)-1 {
 			continue
 		}
 		if v >= 99.95 {
@@ -91,12 +91,17 @@ func FormatDuration(d time.Duration) string {
 
 // FormatAge renders value ages for the header and status row: "now" under
 // 30s, then whole minutes ("2m"), hours ("1h"), and days (tui/SPEC.md §9).
+// The 30–59s gap rounds up to "1m" — "0m" would read as a bug.
 func FormatAge(d time.Duration) string {
 	switch {
 	case d < 30*time.Second:
 		return "now"
 	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		m := int(d.Minutes())
+		if m < 1 {
+			m = 1
+		}
+		return fmt.Sprintf("%dm", m)
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	default:

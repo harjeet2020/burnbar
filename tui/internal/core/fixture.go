@@ -6,10 +6,7 @@
 
 package core
 
-import (
-	"sort"
-	"time"
-)
+import "time"
 
 // f64 makes pointer-typed cost literals readable in fixture tables.
 func f64(v float64) *float64 { return &v }
@@ -161,15 +158,4 @@ func Fixture(tf Timeframe, now time.Time) Snapshot {
 		LagSeconds:    &lag,
 		Conn:          ConnLive,
 	}
-}
-
-// sortModels applies the binding list order: window cost descending, ties
-// by name ascending — stable, jitter-free (tui/SPEC.md §2).
-func sortModels(models []ModelStat) {
-	sort.Slice(models, func(i, j int) bool {
-		if models[i].Cost != models[j].Cost {
-			return models[i].Cost > models[j].Cost
-		}
-		return models[i].Name < models[j].Name
-	})
 }
