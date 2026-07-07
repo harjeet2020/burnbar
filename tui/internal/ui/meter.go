@@ -179,7 +179,19 @@ func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string
 func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
 	th, g := m.theme, m.glyphs
 
-	geo := core.Geometry(st, l.contentW, scale)
+	// The bar's total width is spring-animated (tui/SPEC.md §6); its
+	// interior is recomputed as fractions of whatever width is on screen
+	// this frame. target is the steady-state width the spring pulls toward.
+	target := core.BarWidth(l.contentW, st.TotalTokens(), scale)
+	display := m.barDisplayCells(st.Name, target, l.contentW)
+
+	total := st.TotalTokens()
+	var acc1Frac, acc2Frac float64
+	if total > 0 {
+		acc1Frac = float64(st.Accent1Tokens) / float64(total)
+		acc2Frac = float64(st.Accent2Tokens) / float64(total)
+	}
+	geo := core.SplitBar(display, core.SplitFraction(st), acc1Frac, acc2Frac, st.Accent2Tokens > 0)
 	if geo.Cells == 0 {
 		return ""
 	}
@@ -204,6 +216,13 @@ func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
 		return style.Render(b.String())
 	}
 
+	// A freshly-arrived accent2 slice renders bold for accentEmphasis — the
+	// arrival signal, and the only way a sub-cell tiny request is seen (§6).
+	acc2Style := th.AccentLatest
+	if st.Accent2Tokens > 0 && time.Now().Before(m.accentEmphasisUntil) {
+		acc2Style = acc2Style.Bold(true)
+	}
+
 	inputEnd := geo.InputCells
 	if inputEnd > geo.Base {
 		inputEnd = geo.Base
@@ -213,7 +232,7 @@ func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
 	b.WriteString(run(0, inputEnd, th.AccentPrimary))
 	b.WriteString(run(inputEnd, geo.Base, th.BarOutput))
 	b.WriteString(run(geo.Base, geo.Base+geo.Acc1, th.AccentSession))
-	b.WriteString(run(geo.Base+geo.Acc1, geo.Cells, th.AccentLatest))
+	b.WriteString(run(geo.Base+geo.Acc1, geo.Cells, acc2Style))
 	return b.String()
 }
 

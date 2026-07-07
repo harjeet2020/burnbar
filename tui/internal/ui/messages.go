@@ -69,3 +69,35 @@ type creditTickMsg struct {
 type heartbeatMsg struct {
 	gen int
 }
+
+// --- Stage D live-UX timers -------------------------------------------
+
+// focusClearMsg fires accentClearDelay after a focus-gain to clear accent1
+// (the debounced hold-then-clear of tui/SPEC.md §5). gen guards against a
+// superseded timer when focus is regained again within the delay.
+type focusClearMsg struct {
+	gen int
+}
+
+// relativeTickMsg is the slow steady-state wakeup (tui/SPEC.md §6): every
+// relativeTick it re-derives the snapshot so relative timestamps refresh
+// and the rolling accent window advances. Self-re-arming.
+type relativeTickMsg struct{}
+
+// localRolloverMsg fires at local midnight: the today window empties, the
+// today-slice is refetched, and the timer reschedules (tui/SPEC.md §7).
+type localRolloverMsg struct{}
+
+// utcRolloverMsg fires at UTC midnight: week/month slide by one day, so a
+// re-aggregate (no refetch) and a reschedule (tui/SPEC.md §7).
+type utcRolloverMsg struct{}
+
+// animTickMsg drives one frame of the bar-width animation. It runs only
+// while a spring is unsettled and the loop stops itself once every bar has
+// arrived at its target — 0 fps at rest (tui/SPEC.md §6).
+type animTickMsg struct{}
+
+// emphasisEndMsg fires when a freshly-arrived accent2's bold window closes.
+// It carries nothing — its arrival simply forces a redraw so the emphasis
+// drops even when the bar animation has already settled (tui/SPEC.md §6).
+type emphasisEndMsg struct{}

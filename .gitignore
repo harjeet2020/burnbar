@@ -15,6 +15,7 @@ supabase/.branches/
 
 # --- Go (tui/) ---
 tui/burnbar
+tui/tui
 tui/dist/
 tui/*.test
 

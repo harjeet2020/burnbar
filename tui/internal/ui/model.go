@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/harmonica"
 
 	"github.com/harjeet2020/burnbar/tui/internal/core"
 	"github.com/harjeet2020/burnbar/tui/internal/data"
@@ -58,10 +59,19 @@ type Model struct {
 	baseline []core.DailyRow
 	rows     *core.RowStore
 	loc      *time.Location
-	// anchor is the accent1 anchor — app start / last refresh; live rows
-	// after it are highlighted as "since you last looked" (tui/SPEC.md §5).
-	// Stage D adds the rolling 5-min floor and focus-gain reset.
+	// anchor is the accent1 reset point — app start, last refresh, or the
+	// last debounced focus-gain. The *effective* anchor the aggregate uses
+	// is max(anchor, now−accentWindow), a rolling floor so live rows older
+	// than accentWindow stop being highlighted even without a focus event
+	// (tui/SPEC.md §5) — see effectiveAnchor.
 	anchor time.Time
+	// focusGen guards the debounced focus-clear timer: a newer focus-gain
+	// bumps it so a stale focusClearMsg is ignored (mirrors heartbeatGen).
+	focusGen int
+	// pendingFocusAt is the time of the most recent focus-gain; the
+	// debounced clear jumps the anchor here so accent1 clears ~1 s after
+	// you click into the app (tui/SPEC.md §5).
+	pendingFocusAt time.Time
 
 	// Credits state, kept out of the snapshot until rebuilt() folds it in.
 	creditsVal   *float64
@@ -78,6 +88,18 @@ type Model struct {
 	// tf is the active window; snap is the snapshot derived for it.
 	tf   core.Timeframe
 	snap core.Snapshot
+
+	// --- Stage D animation (tui/SPEC.md §6) -------------------------
+	// spring is the shared config; anim holds one animated bar width per
+	// model (keyed by name, like selected, so it survives re-sorts).
+	// animating guards the ~30 fps tick loop so it never stacks and stops
+	// the instant every bar settles (idle = 0 fps).
+	spring    harmonica.Spring
+	anim      map[string]*barAnim
+	animating bool
+	// accentEmphasisUntil is the deadline through which a freshly-arrived
+	// accent2 slice renders bold — the arrival signal (tui/SPEC.md §6).
+	accentEmphasisUntil time.Time
 
 	// selected tracks the selected model by *name*, not row index, so
 	// selection survives re-sorts and window switches (tui/SPEC.md §2).
@@ -122,6 +144,8 @@ func New(cfg data.Config) Model {
 		conn:       initialConn(live),
 		loading:    true,
 		tf:         core.TimeframeToday,
+		spring:     newSpring(),
+		anim:       make(map[string]*barAnim),
 	}
 	if cfg.HasCredentialsForCredits() {
 		m.credits = data.NewCreditsClient(cfg)
@@ -145,7 +169,15 @@ func initialConn(live data.LiveSource) core.ConnState {
 // and today-slice fetches are deferred until the source's first join
 // (subscribe before fetch, tui/SPEC.md §7) — see the LiveJoined handler.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.startLiveCmd()}
+	now := time.Now()
+	cmds := []tea.Cmd{
+		m.startLiveCmd(),
+		// Stage D steady-state timers (tui/SPEC.md §6/§7): the relative-time
+		// tick and the two midnight rollovers, each self-rescheduling.
+		armRelativeTick(),
+		armLocalRollover(now, m.loc),
+		armUTCRollover(now),
+	}
 	if m.credits != nil {
 		cmds = append(cmds, m.fetchCreditsCmd())
 	}
@@ -164,7 +196,7 @@ func (m Model) rebuilt(now time.Time) Model {
 		Window:   m.tf,
 		Now:      now,
 		Loc:      m.loc,
-		Anchor:   m.anchor,
+		Anchor:   m.effectiveAnchor(now),
 	})
 
 	var spend float64
@@ -193,7 +225,21 @@ func (m Model) rebuilt(now time.Time) Model {
 		}
 	}
 	m.scroll = m.currentLayout().clampScroll(m.scroll)
+	m = m.reconcileAnim()
 	return m.ensureSelectionVisible()
+}
+
+// effectiveAnchor is the accent1 anchor the aggregate actually uses:
+// max(m.anchor, now−accentWindow). The rolling floor makes accent1 a
+// "recent activity" window that ages out on its own — applied
+// unconditionally, since keyboard focus is the only signal terminals
+// report and the meter's usual home is visible-but-unfocused beside the
+// working terminal (tui/SPEC.md §5).
+func (m Model) effectiveAnchor(now time.Time) time.Time {
+	if floor := now.Add(-accentWindow); floor.After(m.anchor) {
+		return floor
+	}
+	return m.anchor
 }
 
 // selectedIndex resolves the selected model name to its position in the

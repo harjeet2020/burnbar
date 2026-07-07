@@ -7,6 +7,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -27,6 +28,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// resize snaps, never animates (tui/SPEC.md §4).
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll = m.currentLayout().clampScroll(m.scroll)
+		// Bars snap to the new width — a resize must feel like the terminal
+		// is in charge, never animated (tui/SPEC.md §4/§6).
+		m = m.snapBars()
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -34,6 +38,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleClick(msg)
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg)
+	case tea.FocusMsg:
+		// Focus-gain means "seen it": clear accent1, but on a debounce so a
+		// glance still catches what changed (tui/SPEC.md §5). accent2 is
+		// anchor-independent and untouched here.
+		m.focusGen++
+		m.pendingFocusAt = time.Now()
+		return m, armFocusClear(m.focusGen)
+	case tea.BlurMsg:
+		// No blur exception: a frozen anchor would hoard highlights while
+		// the meter sits visible-but-unfocused (tui/SPEC.md §5).
+		return m, nil
+	case focusClearMsg:
+		if msg.gen != m.focusGen {
+			return m, nil // a re-focus within the delay superseded this
+		}
+		m.anchor = m.pendingFocusAt
+		return m.rebuilt(time.Now()), nil
 
 	// --- Data layer (Stage C) -------------------------------------------
 	case liveStartedMsg:
@@ -70,6 +91,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // a since-reset heartbeat, or credits disabled
 		}
 		return m, m.fetchCreditsCmd()
+	case relativeTickMsg:
+		// Re-derive so relative timestamps refresh and the rolling accent
+		// window advances (tui/SPEC.md §6), then re-arm — the sole
+		// steady-state wakeup.
+		return m.rebuilt(time.Now()), armRelativeTick()
+	case localRolloverMsg:
+		// Local midnight: drop the stale today-slice, refetch it, and
+		// reschedule (tui/SPEC.md §7). Week/month are untouched.
+		now := time.Now()
+		m.rows.ClearFetched()
+		m = m.rebuilt(now)
+		return m.withAnim(tea.Batch(m.fetchTodaySliceCmd(), armLocalRollover(now, m.loc)))
+	case utcRolloverMsg:
+		// UTC midnight: week/month day boundaries shifted — re-aggregate
+		// (no refetch) and reschedule (tui/SPEC.md §7).
+		now := time.Now()
+		return m.rebuilt(now).withAnim(armUTCRollover(now))
+	case animTickMsg:
+		// One frame: advance every spring; when all have settled, stop the
+		// loop and go back to 0 fps (tui/SPEC.md §6).
+		var settled bool
+		m, settled = m.stepAnim()
+		if settled {
+			m.animating = false
+			log.Printf("anim: loop stop (settled)")
+			return m, nil
+		}
+		return m, animTickCmd()
+	case emphasisEndMsg:
+		// No state change needed — the bold check reads the clock; returning
+		// forces the redraw that drops it (tui/SPEC.md §6).
+		return m, nil
 	}
 	return m, nil
 }
@@ -86,14 +139,22 @@ func (m Model) handleLive(ev data.LiveEvent) (tea.Model, tea.Cmd) {
 		// so stale live rows go and the baseline+slice are refetched.
 		m.rows.ClearLive()
 		m = m.rebuilt(time.Now())
-		return m, tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh, m.liveGen))
+		return m.withAnim(tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh, m.liveGen)))
 	case data.LiveRow:
 		now := time.Now()
-		m.rows.Upsert(ev.Row)
+		isNew := m.rows.Upsert(ev.Row)
 		m = m.rebuilt(now)
 		cmds := []tea.Cmd{waitLiveCmd(m.liveCh, m.liveGen)}
 		cmds = append(cmds, m.onCreditEvent(now)...)
-		return m, tea.Batch(cmds...)
+		// A genuinely-new arrival is the newest live row → the accent2
+		// slice; flash it bold for accentEmphasis (tui/SPEC.md §6). The
+		// one-shot end command guarantees a redraw drops the bold even if
+		// the bar animation has already settled (no tick loop otherwise).
+		if isNew {
+			m.accentEmphasisUntil = now.Add(accentEmphasis)
+			cmds = append(cmds, emphasisEndCmd())
+		}
+		return m.withAnim(tea.Batch(cmds...))
 	default: // data.LiveConn
 		m.conn = ev.State
 		return m.rebuilt(time.Now()), waitLiveCmd(m.liveCh, m.liveGen)
@@ -111,7 +172,7 @@ func (m Model) handleBaseline(msg baselineMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.dataErr = ""
 	m.dataAt = time.Now()
-	return m.rebuilt(time.Now()), nil
+	return m.rebuilt(time.Now()).withAnim(nil)
 }
 
 // handleTodaySlice folds the fetched raw rows into the store (as fetched,
@@ -126,7 +187,7 @@ func (m Model) handleTodaySlice(msg todaySliceMsg) (tea.Model, tea.Cmd) {
 	}
 	m.loading = false
 	m.dataErr = ""
-	return m.rebuilt(time.Now()), nil
+	return m.rebuilt(time.Now()).withAnim(nil)
 }
 
 // handleCredits folds a credits result in and re-arms the idle heartbeat
@@ -211,7 +272,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Help):
 		m.showHelp = true
 	case key.Matches(msg, k.Timeframe):
-		m = m.setTimeframe(m.tf.Next())
+		// A window switch re-cuts the data → animate the new bar lengths.
+		return m.setTimeframe(m.tf.Next()).withAnim(nil)
 	case key.Matches(msg, k.Refresh):
 		return m.refresh()
 	case key.Matches(msg, k.ToggleSource):
@@ -245,6 +307,7 @@ func (m Model) setTimeframe(tf core.Timeframe) Model {
 func (m Model) refresh() (tea.Model, tea.Cmd) {
 	m.rows.Clear()
 	m.anchor = time.Now()
+	m.accentEmphasisUntil = time.Time{} // refresh clears accents (tui/SPEC.md §5)
 	m = m.rebuilt(time.Now())
 
 	cmds := []tea.Cmd{m.fetchBaselineCmd(), m.fetchTodaySliceCmd()}
@@ -255,7 +318,7 @@ func (m Model) refresh() (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	return m, tea.Batch(cmds...)
+	return m.withAnim(tea.Batch(cmds...))
 }
 
 // toggleSource swaps the live source between realtime and poll at runtime
@@ -347,8 +410,7 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		_, ranges := m.timeframeSelector()
 		for _, r := range ranges {
 			if msg.X >= r.x0 && msg.X < r.x1 {
-				m = m.setTimeframe(r.tf)
-				return m, nil
+				return m.setTimeframe(r.tf).withAnim(nil)
 			}
 		}
 		return m, nil

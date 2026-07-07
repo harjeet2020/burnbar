@@ -179,3 +179,86 @@ func TestGeometry(t *testing.T) {
 		}
 	})
 }
+
+func TestSplitBar(t *testing.T) {
+	t.Run("zero width draws nothing", func(t *testing.T) {
+		if g := SplitBar(0, 0.5, 0.2, 0.1, true); g != (BarGeometry{}) {
+			t.Errorf("got %+v, want zero value", g)
+		}
+	})
+
+	t.Run("no accents: base spans the whole bar", func(t *testing.T) {
+		g := SplitBar(30, 0.5, 0, 0, false)
+		if g.Cells != 30 || g.Base != 30 || g.Acc1 != 0 || g.Acc2 != 0 {
+			t.Errorf("Cells/Base/Acc1/Acc2 = %d/%d/%d/%d, want 30/30/0/0", g.Cells, g.Base, g.Acc1, g.Acc2)
+		}
+		if g.InputCells != 15 { // round(0.5·30)
+			t.Errorf("InputCells = %d, want 15", g.InputCells)
+		}
+	})
+
+	t.Run("accents sit at the right end, proportional to their share", func(t *testing.T) {
+		// 20-cell bar, 25% accent1, 10% accent2 → base 13, acc1 5, acc2 2.
+		g := SplitBar(20, 0.5, 0.25, 0.10, true)
+		if g.Base != 13 || g.Acc1 != 5 || g.Acc2 != 2 {
+			t.Errorf("Base/Acc1/Acc2 = %d/%d/%d, want 13/5/2", g.Base, g.Acc1, g.Acc2)
+		}
+	})
+
+	t.Run("cumulative rounding keeps the segments summing to the width", func(t *testing.T) {
+		// The sum invariant is what makes the animated bar never gap or
+		// overflow; check it across widths and awkward fractions.
+		fracs := []struct{ a1, a2 float64 }{
+			{0.0, 0.0}, {0.333, 0.333}, {0.1, 0.05}, {0.49, 0.49}, {0.7, 0.29},
+		}
+		for w := 1; w <= 60; w++ {
+			for _, f := range fracs {
+				g := SplitBar(w, 0.5, f.a1, f.a2, false)
+				if g.Base+g.Acc1+g.Acc2 != w {
+					t.Fatalf("w=%d a1=%v a2=%v: Base+Acc1+Acc2 = %d, want %d",
+						w, f.a1, f.a2, g.Base+g.Acc1+g.Acc2, w)
+				}
+				if g.Base < 0 || g.Acc1 < 0 || g.Acc2 < 0 {
+					t.Fatalf("w=%d a1=%v a2=%v: negative region %+v", w, f.a1, f.a2, g)
+				}
+			}
+		}
+	})
+
+	t.Run("min-visible floor forces a live accent2 to 1 cell, borrowed from accent1", func(t *testing.T) {
+		// acc2Frac rounds to 0 on a 20-cell bar, but a live accent2 must show.
+		g := SplitBar(20, 0.5, 0.30, 0.001, true)
+		if g.Acc2 != 1 {
+			t.Errorf("Acc2 = %d, want 1 (min-visible floor)", g.Acc2)
+		}
+		if g.Base+g.Acc1+g.Acc2 != 20 {
+			t.Errorf("sum = %d, want 20 (length unchanged by the floor)", g.Base+g.Acc1+g.Acc2)
+		}
+		// The borrowed cell comes from accent1 (present here), not base.
+		plain := SplitBar(20, 0.5, 0.30, 0.001, false)
+		if g.Acc1 != plain.Acc1-1 {
+			t.Errorf("Acc1 = %d, want one less than the un-floored %d", g.Acc1, plain.Acc1)
+		}
+	})
+
+	t.Run("floor borrows from base when there is no accent1", func(t *testing.T) {
+		g := SplitBar(20, 0.5, 0, 0.001, true)
+		if g.Acc2 != 1 || g.Acc1 != 0 || g.Base != 19 {
+			t.Errorf("Base/Acc1/Acc2 = %d/%d/%d, want 19/0/1", g.Base, g.Acc1, g.Acc2)
+		}
+	})
+
+	t.Run("a 1-cell bar with a tiny live accent2 is entirely the accent", func(t *testing.T) {
+		g := SplitBar(1, 0.5, 0, 0.001, true)
+		if g.Base != 0 || g.Acc1 != 0 || g.Acc2 != 1 {
+			t.Errorf("Base/Acc1/Acc2 = %d/%d/%d, want 0/0/1", g.Base, g.Acc1, g.Acc2)
+		}
+	})
+
+	t.Run("no floor when there is no live accent2", func(t *testing.T) {
+		g := SplitBar(20, 0.5, 0.30, 0.001, false)
+		if g.Acc2 != 0 {
+			t.Errorf("Acc2 = %d, want 0 (no live accent2, no floor)", g.Acc2)
+		}
+	})
+}

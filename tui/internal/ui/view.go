@@ -18,6 +18,10 @@ func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	// Focus reporting drives the accent-clear on focus-gain (tui/SPEC.md §5).
+	// Enabled unconditionally: terminals that don't support it simply send
+	// no FocusMsg/BlurMsg and the rolling accentWindow governs alone.
+	v.ReportFocus = true
 	return v
 }
 

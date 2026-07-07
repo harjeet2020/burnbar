@@ -208,11 +208,25 @@ readable (segments by glyph, selection by `▸` + bold, status by symbol
   viewport" signal — and the meter's primary usage pattern is sitting
   *visible but never focused* beside the working terminal, where a
   blur-frozen anchor would accumulate highlights forever.
-- **Focus-gain still resets the anchor to now** when the event is
-  available — clicking into the meter means "seen it", clearing
-  accent1 instantly.
+- **Focus-gain resets the anchor to now** when the event is available —
+  clicking into the meter means "seen it" — **but on a ~1 s debounce, not
+  instantly**: the accents hold for `accentClearDelay` (~1 s, a named
+  constant tuned by feel) after focus-gain so a glance still catches what
+  changed, *then* clear. ANSI-16 has no alpha, so this is a timed
+  hold-then-clear (like the accent2 emphasis in §6), not a true fade.
 
-Slice widths follow the same token-proportional math as bar lengths.
+Slice widths follow the same token-proportional math as bar lengths,
+**with one floor: a live accent2 slice always renders at least 1 cell
+wide** regardless of its token proportion — the minimum-visible-event
+rule (§3's "min 1 cell" for bar width, applied here to the highlight).
+Its purpose is the tiny-request case: a request small enough to move the
+bar by a sub-cell fraction (a few hundred tokens against a `scale 2M`
+bar) would otherwise paint a zero-width highlight and land invisibly,
+which for a "a request landing is *seen*" meter (§1) is a failure. The
+1-cell floor plus the ~1 s bold emphasis (§6) together guarantee every
+captured request is visibly seen; the floor borrows its cell from the
+segment it sits in, so between-bar bar *lengths* stay mathematically
+exact.
 The 5-minute window is a named constant (`accentWindow`), tuned by feel
 in Stage D — 2–3 min is twitchy across agent think-pauses, 10 min keeps
 stale work looking new. Focus reporting is xterm mode 1004, surfaced as
@@ -246,7 +260,10 @@ update).
 
 The accent2 arrival moment gets a brief emphasis: the new slice renders
 bold for the first ~1 s (one timed message, not a fade — ANSI-16 has no
-alpha).
+alpha). This ~1 s emphasis is also the *primary* arrival signal for tiny
+requests (§5's minimum-visible 1-cell accent2 floor): when a landing
+request is too small to lengthen the bar, the single accent2 cell
+pulsing bold for a second is what makes it seen.
 
 ## 7. Data & State Logic
 
@@ -403,6 +420,10 @@ vars override file values:
 
 Missing-config error message includes a ready-to-paste TOML template.
 The repo `.env` maps onto the env overrides for dev convenience.
+
+An optional `[colors]` section (token → ANSI color name) is managed by
+the Stage E.1 theme picker rather than hand-edited in the normal case;
+absent or partial, the §5 default slot applies per-token.
 
 ## 8. Errors & Resilience
 
@@ -623,7 +644,7 @@ render path and the credits/no-key hint. realtime-go v0.1.1 limitations
 (broken channel rejoin, capped retries, optimistic subscribe) documented
 in `realtime.go` and root §6 — the spike is the go/no-go.
 
-### Stage C.1 — Realtime via phx (next)
+### Stage C.1 — Realtime via phx
 
 **Goal:** replace the broken `realtime-go` with a WebSocket path that
 survives socket drops and laptop sleep/wake, so realtime can be the
@@ -636,19 +657,19 @@ recovers on its own across a network blip and a sleep/wake (the exact
 thing realtime-go failed); nothing the library logs ever touches the
 alt-screen; and `p` toggles realtime ↔ poll live.
 
-- [ ] Swap `supabase-community/realtime-go` → `github.com/nshafer/phx`;
+- [x] Swap `supabase-community/realtime-go` → `github.com/nshafer/phx`;
   rewrite `realtime.go`'s internals against it — the `LiveSource`
   interface, `poll.go`, and all UI wiring stay unchanged
-- [ ] Send the Supabase `phx_join` payload (`config.postgres_changes`
+- [x] Send the Supabase `phx_join` payload (`config.postgres_changes`
   INSERT on `public.requests` + `access_token`); decode INSERTs through
   the existing `requestDTO`; point phx's logger at the debug file, never
   stderr
-- [ ] Poll backup: flat **20 s** interval (down from 2 s) — it is the
+- [x] Poll backup: flat **20 s** interval (down from 2 s) — it is the
   manual backup, not an auto-fallback
-- [ ] Add the `p` key to toggle the live source at runtime; reflect the
+- [x] Add the `p` key to toggle the live source at runtime; reflect the
   active source in the status row + hint bar
-- [ ] Flip the default back to `realtime`; keep `poll` as the override
-- [ ] Verify live: a real INSERT, a network blip, and a sleep/wake;
+- [x] Flip the default back to `realtime`; keep `poll` as the override
+- [x] Verify live: a real INSERT, a network blip, and a sleep/wake;
   record the go/no-go in root §6
 
 ### Stage D — Live UX
@@ -668,11 +689,13 @@ row honestly reflects connection state, meter lag, and staleness; and at
 rest the app provably renders at 0 fps (no tick loop, no CPU) between the
 slow 15 s timestamp refreshes.
 
-- [ ] Focus anchor: rolling 5-min `accentWindow` + focus-gain reset,
-  anchor-independent accent2 (§5); verify v2 focus-report API; tune the
-  window constant by feel; tmux note in docs
+- [ ] Focus anchor: rolling 5-min `accentWindow` + focus-gain reset **on
+  a ~1 s `accentClearDelay` debounce** (hold-then-clear, not instant —
+  §5), anchor-independent accent2 (§5); verify v2 focus-report API; tune
+  the window + delay constants by feel; tmux note in docs
 - [ ] Harmonica springs on bar widths; scale-step collective retarget;
-  conditional tick loop (idle = 0 fps); accent2 arrival emphasis
+  conditional tick loop (idle = 0 fps); accent2 arrival emphasis +
+  **minimum-visible 1-cell accent2 floor** for tiny requests (§5)
 - [ ] Status row: last request, meter lag, scale chip, connection
   states; 15 s relative-time ticker; local-midnight + UTC-midnight
   rollover timers
@@ -695,6 +718,47 @@ place.
 - [ ] Drill-down navigation (selection ↔ details, live updates in place)
 - [ ] Stats grid + provider split table per §2, `—` for NULL-derived
   values
+
+### Stage E.1 — Live theme picker (ANSI-16 remap)
+
+**Goal:** Fix the one place the ANSI-16-only choice (§5) bites. The app
+maps each semantic token to a *fixed* ANSI slot (`accent.primary→cyan`,
+`bar.output→blue`, `accent.session→yellow`, `accent.latest→magenta`),
+and in some terminal themes two of those slots are near-identical — the
+input/output segments or the two accents collapse into each other and
+the app's core distinctions stop reading. Let the user re-slot which of
+*their theme's* 16 colors each token grabs, seeing the change live, and
+persist it. This buys back the lost distinctions **without spending the
+theme-native inheritance** that makes ANSI-16 the right default in the
+first place. Sequenced after the details screen (Stage E) — it depends on
+the finished accent system (Stage D) to preview accents meaningfully.
+
+**Scope guard — remap within ANSI-16 only, never to hex.** A token may
+be pointed at a different one of the 16 ANSI colors; it may **not** be
+set to a 256/truecolor hex value. Hex would let the app clash with the
+terminal theme instead of inheriting it — the exact pitfall §5 exists to
+avoid. Truecolor theming is explicitly out of scope (a possible
+far-later, opt-in escalation with ANSI-16 staying the default — not now).
+
+**Done when:** a `theme`/`c` binding opens a picker screen listing the
+semantic tokens (§5) with each one's current ANSI color; changing a
+token's color updates a **live sample of the real meter** (a rendered
+bar with real segments + both accents, not abstract swatches) in the
+same frame; `s` saves to config and `esc` cancels (reverting the
+in-memory palette); and relaunching picks up the saved palette. Removing
+color entirely (`NO_COLOR`) still yields a fully readable app — the
+picker is enhancement, never load-bearing (§5).
+
+- [ ] Theme-editor screen (token list + live meter sample); edit-in-place
+  → live in-memory apply → `s` persist / `esc` revert
+- [ ] `[colors]` table in `config.toml` (token → ANSI color name) with the
+  existing env-override precedence (§7); missing/partial table falls back
+  to the §5 default slot per-token; unknown color names rejected with a
+  hint
+- [ ] Preview renders through the same style tokens the real view uses
+  (one palette source of truth — no divergent editor styling)
+- [ ] `NO_COLOR`/monochrome parity preserved; ASCII glyph fallbacks
+  untouched
 
 ### Stage F — Hardening & polish
 
@@ -733,3 +797,12 @@ burst-grouped credits debounce (§7), local today with UTC-pure
 week/month (§7). No open questions — the spec is build-ready.
 Anything discovered during implementation that contradicts it goes back
 to the user before code deviates.
+
+**2026-07-07 additions (pre-Stage-D):** two Stage-D accent refinements —
+the minimum-visible 1-cell accent2 floor + ~1 s bold emphasis for tiny
+requests (§3/§5/§6), and focus-gain accent clearing on a ~1 s
+`accentClearDelay` debounce rather than instantly (§5) — plus a new
+**Stage E.1 live theme picker** (ANSI-16 re-slotting only, live preview,
+`[colors]` config; §5/§7/§10), sequenced after the details screen. All
+agreed with the user; both accent refinements are explicitly "tune by
+feel later" once the app has seen real use.

@@ -111,6 +111,85 @@ func Geometry(m ModelStat, width int, scale int64) BarGeometry {
 	}
 }
 
+// SplitBar lays out an already-decided integer bar width into its cell
+// runs, given the interior proportions (tui/SPEC.md §3/§5). It is the
+// render-time counterpart to Geometry: Geometry decides the steady-state
+// total from token counts, while SplitBar splits whatever width the
+// animation is currently showing (Stage D springs animate the total, and
+// every frame the segments are recomputed as fractions of it, §6).
+//
+//   - displayCells: the current integer bar width (0 ⇒ draw nothing).
+//   - inputFrac: the input/output glyph boundary as a share of the whole
+//     bar (cost-based via SplitFraction, token-fallback embodied there).
+//   - acc1Frac / acc2Frac: the accent slices as shares of the whole bar
+//     (Accent{1,2}Tokens / TotalTokens). Their sum is ≤ 1 (accents are
+//     subsets of the model's window tokens).
+//   - liveAccent2: whether a live accent2 slice exists at all — the
+//     minimum-visible floor below only applies when it does.
+//
+// Boundaries use cumulative proportional rounding (each boundary is
+// round(cumulativeFraction · displayCells)), so Base+Acc1+Acc2 always
+// equals displayCells exactly with no drift or gap. The accents sit at
+// the right end (newest usage grows the bar rightward).
+//
+// Minimum-visible accent2 floor (tui/SPEC.md §5): a live accent2 that
+// rounds to zero cells is forced to one, borrowed from the region to its
+// left (Acc1 if present, else Base). This guarantees a request too small
+// to lengthen the bar still paints one visible cell — the "a request
+// landing is seen" rule — without changing the bar's overall length.
+func SplitBar(displayCells int, inputFrac, acc1Frac, acc2Frac float64, liveAccent2 bool) BarGeometry {
+	if displayCells <= 0 {
+		return BarGeometry{}
+	}
+
+	// Cumulative right-end boundaries: base | acc1 | acc2.
+	baseFrac := 1 - acc1Frac - acc2Frac
+	if baseFrac < 0 {
+		baseFrac = 0
+	}
+	baseEnd := clampCells(int(math.Round(baseFrac*float64(displayCells))), displayCells)
+	acc1End := clampCells(int(math.Round((baseFrac+acc1Frac)*float64(displayCells))), displayCells)
+	if acc1End < baseEnd {
+		acc1End = baseEnd
+	}
+
+	base := baseEnd
+	acc1 := acc1End - baseEnd
+	acc2 := displayCells - acc1End
+
+	// Minimum-visible floor: borrow one cell from the nearest left region.
+	if liveAccent2 && acc2 == 0 {
+		switch {
+		case acc1 > 0:
+			acc1--
+		default:
+			base--
+		}
+		acc2 = 1
+	}
+
+	inputCells := clampCells(int(math.Round(inputFrac*float64(displayCells))), displayCells)
+
+	return BarGeometry{
+		Cells:      displayCells,
+		InputCells: inputCells,
+		Base:       base,
+		Acc1:       acc1,
+		Acc2:       acc2,
+	}
+}
+
+// clampCells bounds a computed cell count to [0, max].
+func clampCells(n, max int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
 // SplitFraction returns the input share of a bar's interior — the
 // boundary between the input and output segments. Primary source: the
 // window's summed actual split costs (cache discounts embodied). If the
