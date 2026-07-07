@@ -46,7 +46,12 @@ type Model struct {
 	live    data.LiveSource
 	liveCh  <-chan data.LiveEvent
 	liveCtx context.Context
-	sched   *data.CreditScheduler
+	// liveCancel stops the running source; the `p` toggle calls it to swap
+	// sources at runtime. liveGen tags the active source so events from a
+	// stopped one are ignored (mirrors heartbeatGen).
+	liveCancel context.CancelFunc
+	liveGen    int
+	sched      *data.CreditScheduler
 
 	// Stores the snapshot is aggregated from (tui/SPEC.md §7): the 30-day
 	// baseline view rows and the deduped raw rows (today-slice ∪ live).
@@ -96,22 +101,27 @@ func New(cfg data.Config) Model {
 	rest := data.NewRESTClient(cfg)
 	live, _ := data.NewLiveSource(cfg, rest)
 
+	// A cancellable context lets the `p` toggle stop the source and start a
+	// fresh one (Start is once-only, so switching needs a new instance).
+	ctx, cancel := context.WithCancel(context.Background())
+
 	m := Model{
-		cfg:     cfg,
-		theme:   theme,
-		glyphs:  glyphs,
-		keys:    newKeyMap(glyphs),
-		help:    newHelpModel(theme, glyphs),
-		rest:    rest,
-		live:    live,
-		liveCtx: context.Background(),
-		sched:   data.NewCreditScheduler(),
-		rows:    core.NewRowStore(),
-		loc:     time.Local,
-		anchor:  time.Now(),
-		conn:    initialConn(live),
-		loading: true,
-		tf:      core.TimeframeToday,
+		cfg:        cfg,
+		theme:      theme,
+		glyphs:     glyphs,
+		keys:       newKeyMap(glyphs),
+		help:       newHelpModel(theme, glyphs),
+		rest:       rest,
+		live:       live,
+		liveCtx:    ctx,
+		liveCancel: cancel,
+		sched:      data.NewCreditScheduler(),
+		rows:       core.NewRowStore(),
+		loc:        time.Local,
+		anchor:     time.Now(),
+		conn:       initialConn(live),
+		loading:    true,
+		tf:         core.TimeframeToday,
 	}
 	if cfg.HasCredentialsForCredits() {
 		m.credits = data.NewCreditsClient(cfg)

@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -36,11 +37,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Data layer (Stage C) -------------------------------------------
 	case liveStartedMsg:
+		if msg.gen != m.liveGen {
+			return m, nil // a source the toggle has since replaced
+		}
 		m.liveCh = msg.ch
-		return m, waitLiveCmd(m.liveCh)
+		return m, waitLiveCmd(m.liveCh, m.liveGen)
 	case liveMsg:
+		if msg.gen != m.liveGen {
+			return m, nil
+		}
 		return m.handleLive(msg.ev)
 	case liveClosedMsg:
+		if msg.gen != m.liveGen {
+			return m, nil // the old source we intentionally stopped on toggle
+		}
 		m.conn = core.ConnOffline
 		return m.rebuilt(time.Now()), nil
 	case baselineMsg:
@@ -76,17 +86,17 @@ func (m Model) handleLive(ev data.LiveEvent) (tea.Model, tea.Cmd) {
 		// so stale live rows go and the baseline+slice are refetched.
 		m.rows.ClearLive()
 		m = m.rebuilt(time.Now())
-		return m, tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh))
+		return m, tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh, m.liveGen))
 	case data.LiveRow:
 		now := time.Now()
 		m.rows.Upsert(ev.Row)
 		m = m.rebuilt(now)
-		cmds := []tea.Cmd{waitLiveCmd(m.liveCh)}
+		cmds := []tea.Cmd{waitLiveCmd(m.liveCh, m.liveGen)}
 		cmds = append(cmds, m.onCreditEvent(now)...)
 		return m, tea.Batch(cmds...)
 	default: // data.LiveConn
 		m.conn = ev.State
-		return m.rebuilt(time.Now()), waitLiveCmd(m.liveCh)
+		return m.rebuilt(time.Now()), waitLiveCmd(m.liveCh, m.liveGen)
 	}
 }
 
@@ -204,6 +214,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.setTimeframe(m.tf.Next())
 	case key.Matches(msg, k.Refresh):
 		return m.refresh()
+	case key.Matches(msg, k.ToggleSource):
+		return m.toggleSource()
 	case m.scr == screenMeter && key.Matches(msg, k.Up):
 		m = m.moveSelection(-1)
 	case m.scr == screenMeter && key.Matches(msg, k.Down):
@@ -244,6 +256,32 @@ func (m Model) refresh() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// toggleSource swaps the live source between realtime and poll at runtime
+// (tui/SPEC.md §7). It stops the running source, builds a fresh one for the
+// flipped kind — Start is once-only, so a new instance is mandatory — and
+// bumps the generation so the stopped source's trailing events (including
+// the liveClosedMsg its cancellation triggers) are ignored. The new source's
+// first LiveJoined re-baselines, so no manual refetch is needed here.
+func (m Model) toggleSource() (tea.Model, tea.Cmd) {
+	m.liveCancel()
+
+	if m.cfg.LiveSource == data.LiveSourcePoll {
+		m.cfg.LiveSource = data.LiveSourceRealtime
+	} else {
+		m.cfg.LiveSource = data.LiveSourcePoll
+	}
+	m.live, _ = data.NewLiveSource(m.cfg, m.rest)
+	m.liveGen++
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.liveCtx, m.liveCancel = ctx, cancel
+
+	// Reflect the switch immediately; the new source confirms health on its
+	// first join.
+	m.conn = initialConn(m.live)
+	return m.rebuilt(time.Now()), m.startLiveCmd()
 }
 
 // moveSelection moves the selection by delta rows, clamped, and keeps it

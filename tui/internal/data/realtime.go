@@ -1,23 +1,25 @@
-// Realtime LiveSource (tui/SPEC.md §7) — an opt-in Phoenix-channel WebSocket
-// to Supabase Realtime carrying postgres_changes INSERT events on
-// public.requests. NOT the default: the live go/no-go spike confirmed
-// realtime-go v0.1.1 cannot recover from a dropped socket (see below), so
-// live_source defaults to "poll" (root SPEC §6). This path is kept for when
-// the library is fixed or replaced; select it with live_source="realtime".
+// Realtime LiveSource (tui/SPEC.md §7) — a Phoenix-channel WebSocket to
+// Supabase Realtime carrying postgres_changes INSERT events on
+// public.requests. This is the default source (root SPEC §6): a real
+// request lights a bar in ~1–2s, versus the 20s worst case of the poll
+// backup.
 //
-// Confirmed no-go — realtime-go v0.1.1 has two disqualifying defects:
-//   - Self-deadlocking reconnect: on any socket close its handleMessages()
-//     calls reconnect(), which sets isReconnecting=true and then loops
-//     calling Connect() — but Connect() rejects with "client is already
-//     reconnecting" whenever that flag is set. So every retry fails
-//     instantly and it gives up after MaxRetries, permanently. Recovery is
-//     structurally impossible and cannot be fixed through the public API.
-//   - It logs through log.Default() (stderr); in an alt-screen TUI that
-//     paints over the UI. We neutralize this defensively by discarding the
-//     standard logger in main(), but the broken reconnect remains.
+// Transport is github.com/nshafer/phx, a maintained Phoenix Channels client
+// that owns the socket lifecycle — heartbeat, and (unlike the abandoned
+// realtime-go v0.1.1 this replaced) working auto-reconnect with backoff. We
+// drive the socket directly rather than through phx's Channel helper: phx's
+// Channel join params are map[string]string, but Supabase's join needs a
+// nested config object (postgres_changes[], access_token), so we send the
+// phx_join ourselves in the OnOpen callback (which fires on the first connect
+// AND every reconnect, giving us automatic rejoin) and read replies/changes
+// off the raw OnMessage stream. phx logs through a pluggable Logger, so we
+// point it at a no-op sink and never touch the alt-screen.
 //
-// The happy path — connect, receive INSERTs, reconnect on connect failure
-// with backoff — is implemented here and works until the first drop.
+// Concurrency: phx invokes every callback on its own goroutine, so the
+// callbacks funnel events into an internal channel and run() is the sole
+// goroutine that sends on (and closes) the outbound channel — the same
+// single-writer invariant poll.go relies on, which keeps the "close on ctx
+// cancel" contract panic-free under the runtime source toggle.
 
 package data
 
@@ -25,154 +27,238 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand"
+	"net/url"
+	"sync/atomic"
 	"time"
 
-	"github.com/supabase-community/realtime-go/realtime"
+	"github.com/nshafer/phx"
 
 	"github.com/harjeet2020/burnbar/tui/internal/core"
 )
 
-// realtimeTopic is the channel topic for public.requests. realtime-go
-// expects the "realtime:{schema}:{table}" form.
+// realtimeTopic is the Phoenix channel topic for public.requests, in
+// Supabase's "realtime:{schema}:{table}" form.
 const realtimeTopic = "realtime:public:requests"
 
-// Backoff bounds for our own connect-retry loop (tui/SPEC.md §7: 1s → 30s
-// cap, jittered).
+// changeEvent is the server event name for a postgres_changes notification.
+const changeEvent = "postgres_changes"
+
+// Socket tuning (tui/SPEC.md §7): heartbeat keeps the connection alive, the
+// connect timeout bounds a single dial, and reconnect backoff runs 1s → 30s.
 const (
+	rtHeartbeat      = 15 * time.Second
+	rtConnectTimeout = 30 * time.Second
 	rtInitialBackoff = 1 * time.Second
 	rtMaxBackoff     = 30 * time.Second
-	rtConnectTimeout = 30 * time.Second
 )
 
-// realtimeSource implements LiveSource over realtime-go.
+// realtimeSource implements LiveSource over a phx Phoenix socket.
 type realtimeSource struct {
-	ref     string
-	anonKey string
+	supabaseURL string
+	anonKey     string
 }
 
-// newRealtimeSource builds a realtime source, deriving the project ref
-// from the config URL. Errors when the host isn't addressable by
-// realtime-go (the factory then falls back to polling).
+// newRealtimeSource builds a realtime source from the config. It can only
+// fail when supabase_url is unparseable — already ruled out by config
+// validation — so in practice the factory never falls back for realtime.
 func newRealtimeSource(cfg Config) (*realtimeSource, error) {
-	ref, err := projectRef(cfg.SupabaseURL)
-	if err != nil {
+	if _, err := realtimeEndpoint(cfg.SupabaseURL, cfg.SupabaseAnonKey); err != nil {
 		return nil, err
 	}
-	return &realtimeSource{ref: ref, anonKey: cfg.SupabaseAnonKey}, nil
+	return &realtimeSource{supabaseURL: cfg.SupabaseURL, anonKey: cfg.SupabaseAnonKey}, nil
 }
 
 // Name identifies the source in the status row.
 func (r *realtimeSource) Name() string { return "realtime" }
 
-// Start launches the supervised connect loop and returns the channel.
+// Start launches the socket goroutine and returns the event channel.
 func (r *realtimeSource) Start(ctx context.Context) <-chan LiveEvent {
 	out := make(chan LiveEvent, 16)
 	go r.run(ctx, out)
 	return out
 }
 
-// run supervises the connection: connect, subscribe (emitting LiveJoined),
-// and stay up until ctx ends. On a connect/subscribe failure it emits a
-// reconnecting/offline state and retries with jittered backoff.
+// run owns the socket for the lifetime of ctx. phx handles connect,
+// heartbeat, and reconnect; our callbacks translate its lifecycle into
+// LiveEvents onto an internal channel, and this goroutine is the only one
+// that forwards them to out (and closes it), so the toggle's ctx-cancel
+// close can never race a callback send.
 func (r *realtimeSource) run(ctx context.Context, out chan<- LiveEvent) {
 	defer close(out)
 
-	backoff := rtInitialBackoff
-	attempts := 0
-	for {
-		if ctx.Err() != nil {
-			return
+	endpoint, err := realtimeEndpoint(r.supabaseURL, r.anonKey)
+	if err != nil {
+		send(ctx, out, LiveEvent{Kind: LiveConn, State: core.ConnOffline})
+		return
+	}
+
+	// Callbacks fan into events; run() fans them out to the caller. events is
+	// never closed, so a late callback after ctx-cancel just selects ctx.Done
+	// and returns rather than panicking on a closed channel.
+	events := make(chan LiveEvent, 16)
+	emit := func(ev LiveEvent) {
+		select {
+		case events <- ev:
+		case <-ctx.Done():
 		}
-		if r.connectOnce(ctx, out) {
-			// connectOnce blocks until ctx is done once subscribed.
-			return
-		}
-		attempts++
+	}
+
+	socket := phx.NewSocket(endpoint)
+	socket.Logger = phx.NewNoopLogger() // never stderr — the terminal is the UI
+	socket.HeartbeatInterval = rtHeartbeat
+	socket.ConnectTimeout = rtConnectTimeout
+	socket.ReconnectAfterFunc = func(tries int) time.Duration {
+		// Called on each failed dial. A brief blip reads as "reconnecting";
+		// a sustained outage escalates to "offline" (tui/SPEC.md §7). phx
+		// counts tries from process start, so this is best-effort — the
+		// state self-corrects to live on the next successful rejoin.
 		state := core.ConnReconnecting
-		if attempts >= pollOfflineAfter {
+		if tries >= pollOfflineAfter {
 			state = core.ConnOffline
 		}
-		if !send(ctx, out, LiveEvent{Kind: LiveConn, State: state}) {
+		emit(LiveEvent{Kind: LiveConn, State: state})
+		return rtBackoff(tries)
+	}
+
+	// joinRef ties our phx_join to its phx_reply. Written in OnOpen, read in
+	// OnMessage — both phx goroutines — so it is guarded by an atomic.
+	var joinRef atomic.Uint64
+
+	socket.OnOpen(func() {
+		// Fires on the first connect and on every reconnect: (re)join the
+		// channel. join_ref == ref is the Phoenix convention for a join.
+		ref := socket.MakeRef()
+		joinRef.Store(uint64(ref))
+		_ = socket.PushMessage(phx.Message{
+			Topic:   realtimeTopic,
+			Event:   string(phx.JoinEvent),
+			Payload: joinPayload(r.anonKey),
+			Ref:     ref,
+			JoinRef: ref,
+		})
+	})
+	socket.OnClose(func() {
+		emit(LiveEvent{Kind: LiveConn, State: core.ConnReconnecting})
+	})
+	socket.OnError(func(error) {
+		emit(LiveEvent{Kind: LiveConn, State: core.ConnReconnecting})
+	})
+	socket.OnMessage(func(msg phx.Message) {
+		if msg.Topic != realtimeTopic {
 			return
 		}
-		if !sleepWithJitter(ctx, backoff) {
-			return
-		}
-		if backoff *= 2; backoff > rtMaxBackoff {
-			backoff = rtMaxBackoff
-		}
-	}
-}
-
-// connectOnce runs one connection lifecycle. It returns true when the
-// context ended (a clean stop — the caller should exit) and false when the
-// attempt failed before/at subscribe (the caller should back off and
-// retry).
-func (r *realtimeSource) connectOnce(ctx context.Context, out chan<- LiveEvent) (done bool) {
-	client := realtime.NewRealtimeClient(r.ref, r.anonKey)
-	// SetAuth adds the Authorization: Bearer header alongside apikey so
-	// RLS on requests authorizes the anon subscriber.
-	_ = client.SetAuth(r.anonKey)
-
-	channel := client.Channel(realtimeTopic, &realtime.ChannelConfig{})
-	if err := channel.OnPostgresChange("INSERT", func(change realtime.PostgresChangeEvent) {
-		r.emitRow(ctx, out, change)
-	}); err != nil {
-		return false
-	}
-
-	connCtx, cancel := context.WithTimeout(ctx, rtConnectTimeout)
-	err := client.Connect(connCtx)
-	cancel()
-	if err != nil {
-		return false
-	}
-
-	subErr := channel.Subscribe(ctx, func(state realtime.SubscribeState, e error) {
-		if e == nil && state == realtime.SubscribeStateSubscribed {
-			// Subscribe fires this optimistically once the join is sent;
-			// it's our signal to (re)baseline (tui/SPEC.md §7).
-			send(ctx, out, LiveEvent{Kind: LiveJoined, State: core.ConnLive})
+		switch msg.Event {
+		case string(phx.ReplyEvent):
+			// The reply to our join: subscription is live. Signal a
+			// (re)baseline exactly as the old path did (tui/SPEC.md §7).
+			if uint64(msg.Ref) == joinRef.Load() && replyIsOK(msg.Payload) {
+				emit(LiveEvent{Kind: LiveJoined, State: core.ConnLive})
+			}
+		case changeEvent:
+			if row, ok := insertRow(msg.Payload); ok {
+				emit(LiveEvent{Kind: LiveRow, Row: row})
+			}
 		}
 	})
-	if subErr != nil {
-		_ = client.Disconnect()
-		return false
-	}
 
-	// Stay connected until the app exits. The library owns socket-level
-	// heartbeat and (best-effort) reconnect from here; mid-session
-	// recovery is the spike's concern (see the file header).
-	<-ctx.Done()
-	_ = client.Disconnect()
-	return true
+	if err := socket.Connect(); err != nil {
+		send(ctx, out, LiveEvent{Kind: LiveConn, State: core.ConnOffline})
+		return
+	}
+	defer socket.Disconnect() //nolint:errcheck // best-effort teardown
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-events:
+			if !send(ctx, out, ev) {
+				return
+			}
+		}
+	}
 }
 
-// emitRow decodes an INSERT payload's new row and forwards it as a live
-// event. A malformed payload is dropped (logged upstream via the debug
-// path), mirroring the ingest parser's tolerance (tui/SPEC.md §8).
-func (r *realtimeSource) emitRow(ctx context.Context, out chan<- LiveEvent, change realtime.PostgresChangeEvent) {
-	var payload realtimeInsertPayload
-	if err := json.Unmarshal(change.Payload, &payload); err != nil {
-		return
+// realtimeEndpoint builds the Supabase Realtime WebSocket URL from the
+// project URL: wss scheme, the /realtime/v1 path (phx appends /websocket and
+// the vsn query param itself), and the anon key as the apikey. Deriving from
+// the configured host keeps this working for self-hosted Supabase, not just
+// *.supabase.co.
+func realtimeEndpoint(supabaseURL, anonKey string) (*url.URL, error) {
+	u, err := url.Parse(supabaseURL)
+	if err != nil || u.Host == "" {
+		return nil, err
 	}
-	row, err := payload.Record.toRequestRow()
+	ws := *u
+	ws.Scheme = "wss"
+	ws.Path = "/realtime/v1"
+	ws.RawQuery = url.Values{"apikey": {anonKey}}.Encode()
+	return &ws, nil
+}
+
+// joinPayload is the Supabase phx_join body: subscribe to INSERTs on
+// public.requests, no presence, and the anon key as the access_token so RLS
+// on requests authorizes the subscriber.
+func joinPayload(anonKey string) map[string]any {
+	return map[string]any{
+		"config": map[string]any{
+			"postgres_changes": []map[string]any{
+				{"event": "INSERT", "schema": "public", "table": "requests"},
+			},
+			"presence": map[string]any{"enabled": false},
+			"private":  false,
+		},
+		"access_token": anonKey,
+	}
+}
+
+// replyIsOK reports whether a phx_reply payload carries status "ok".
+func replyIsOK(payload any) bool {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return false
+	}
+	return m["status"] == "ok"
+}
+
+// insertRow decodes a postgres_changes INSERT payload into a live-stamped
+// row. phx hands us the payload as decoded JSON (any), so we re-marshal it
+// into the typed envelope; a non-INSERT or malformed body is dropped,
+// mirroring the ingest parser's tolerance (tui/SPEC.md §8).
+func insertRow(payload any) (core.RequestRow, bool) {
+	raw, err := json.Marshal(payload)
 	if err != nil {
-		return
+		return core.RequestRow{}, false
+	}
+	var p postgresChangesPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return core.RequestRow{}, false
+	}
+	if p.Data.Type != "INSERT" {
+		return core.RequestRow{}, false
+	}
+	row, err := p.Data.Record.toRequestRow()
+	if err != nil {
+		return core.RequestRow{}, false
 	}
 	row.Live = true
 	row.ReceivedAt = time.Now()
-	send(ctx, out, LiveEvent{Kind: LiveRow, Row: row})
+	return row, true
 }
 
-// sleepWithJitter waits for d ± up to 50% jitter, or returns false if ctx
-// ends first.
-func sleepWithJitter(ctx context.Context, d time.Duration) bool {
-	jitter := time.Duration(rand.Int63n(int64(d)/2 + 1))
-	select {
-	case <-time.After(d + jitter):
-		return true
-	case <-ctx.Done():
-		return false
+// rtBackoff returns the reconnect delay for the given attempt count:
+// exponential from rtInitialBackoff, capped at rtMaxBackoff, plus up to 50%
+// jitter so many clients don't retry in lockstep.
+func rtBackoff(tries int) time.Duration {
+	if tries < 1 {
+		tries = 1
 	}
+	d := rtInitialBackoff
+	for i := 1; i < tries && d < rtMaxBackoff; i++ {
+		d *= 2
+	}
+	if d > rtMaxBackoff {
+		d = rtMaxBackoff
+	}
+	return d + time.Duration(rand.Int63n(int64(d)/2+1))
 }

@@ -15,12 +15,11 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// LiveSource values accepted by the live_source config key. Polling is the
-// default: the realtime-go v0.1.1 dependency has a self-deadlocking reconnect
-// (its reconnect() sets isReconnecting=true, which Connect() then rejects on),
-// so it cannot recover from any socket drop — a confirmed no-go for an
-// always-on meter (root SPEC §6). "realtime" stays available as an opt-in for
-// when that library is fixed or replaced.
+// LiveSource values accepted by the live_source config key. "realtime" is
+// the default — a phx Phoenix socket to Supabase Realtime that lights a bar
+// within ~1–2s of a request (root SPEC §6). "poll" is the manual backup: a
+// 20s PostgREST walk of the requests table, built on nothing but net/http,
+// selectable here or toggled at runtime with `p`.
 const (
 	LiveSourceRealtime = "realtime"
 	LiveSourcePoll     = "poll"
@@ -40,8 +39,8 @@ type Config struct {
 	// directly from this machine. Optional: when absent the credits header
 	// shows "—" with a hint.
 	OpenRouterAPIKey string `toml:"openrouter_api_key"`
-	// LiveSource selects the live event mechanism: "poll" (default) or
-	// "realtime".
+	// LiveSource selects the live event mechanism: "realtime" (default) or
+	// "poll".
 	LiveSource string `toml:"live_source"`
 }
 
@@ -87,8 +86,8 @@ Paste this template into the file and fill in your values:
     # https://openrouter.ai/settings/keys
     openrouter_api_key = ""
 
-    # Optional — "poll" (default) or "realtime".
-    live_source = "poll"
+    # Optional — "realtime" (default) or "poll".
+    live_source = "realtime"
 `, e.Path))
 	return b.String()
 }
@@ -140,7 +139,7 @@ func Load() (Config, error) {
 	applyEnvOverrides(&cfg)
 
 	if cfg.LiveSource == "" {
-		cfg.LiveSource = LiveSourcePoll
+		cfg.LiveSource = LiveSourceRealtime
 	}
 
 	if problems := validate(cfg); len(problems) > 0 {

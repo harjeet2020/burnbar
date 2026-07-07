@@ -32,9 +32,9 @@ supabase_anon_key = "YOUR-ANON-KEY"
 # Create one: https://openrouter.ai/settings/keys
 openrouter_api_key = ""
 
-# Optional: how live request events reach the app.
-#   "poll"     (default) — 2s PostgREST polling; robust and recommended
-#   "realtime"           — Supabase Realtime WebSocket (opt-in). The
-#                          realtime-go v0.1.1 library cannot recover from a
-#                          dropped socket, so poll is preferred for now.
-live_source = "poll"
+# Optional: how live request events reach the app. Toggle at runtime with `p`.
+#   "realtime" (default) — Supabase Realtime WebSocket (via nshafer/phx);
+#                          a request lights a bar in ~1-2s.
+#   "poll"               — 20s PostgREST polling; a net/http-only backup for
+#                          when WebSockets are unavailable.
+live_source = "realtime"

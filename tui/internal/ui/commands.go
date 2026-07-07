@@ -33,23 +33,26 @@ const (
 	sliceBackoff    = 5 * time.Second
 )
 
-// startLiveCmd launches the LiveSource and returns its event channel.
+// startLiveCmd launches the LiveSource and returns its event channel, tagged
+// with the current source generation so the toggle can discard a superseded
+// source's late start.
 func (m Model) startLiveCmd() tea.Cmd {
-	live, ctx := m.live, m.liveCtx
+	live, ctx, gen := m.live, m.liveCtx, m.liveGen
 	return func() tea.Msg {
-		return liveStartedMsg{ch: live.Start(ctx)}
+		return liveStartedMsg{ch: live.Start(ctx), gen: gen}
 	}
 }
 
-// waitLiveCmd blocks on the live channel for the next event, re-issued
-// after each event to keep the feed flowing. A closed channel ends it.
-func waitLiveCmd(ch <-chan data.LiveEvent) tea.Cmd {
+// waitLiveCmd blocks on the live channel for the next event, re-issued after
+// each event to keep the feed flowing. A closed channel ends it. gen is
+// echoed onto every message so a toggle-superseded source is ignored.
+func waitLiveCmd(ch <-chan data.LiveEvent, gen int) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return liveClosedMsg{}
+			return liveClosedMsg{gen: gen}
 		}
-		return liveMsg{ev: ev}
+		return liveMsg{ev: ev, gen: gen}
 	}
 }
 

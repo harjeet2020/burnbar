@@ -111,30 +111,57 @@ func TestDecodeDailyAllNullSums(t *testing.T) {
 	}
 }
 
-func TestRealtimeInsertPayload(t *testing.T) {
-	// The postgres_changes INSERT payload nests the new row under "record".
-	payload := []byte(`{
-	  "record": {
-	    "id": 42, "trace_id": "tr", "span_id": "sp", "model": "qwen/qwen3-coder",
-	    "input_tokens": 955000, "output_tokens": 82300, "cost_usd": 0.0214,
-	    "requested_at": "2026-07-06T12:00:00Z", "inserted_at": "2026-07-06T12:00:01Z"
-	  },
-	  "old_record": {}
+func TestInsertRowFromRealtimeFrame(t *testing.T) {
+	// A Supabase Realtime postgres_changes INSERT frame: the new row nests
+	// under data.record, with data.type naming the operation. phx delivers
+	// this as decoded JSON (any), which insertRow re-marshals into the typed
+	// envelope, guards on the INSERT type, and stamps as live.
+	frame := []byte(`{
+	  "ids": [1],
+	  "data": {
+	    "type": "INSERT", "schema": "public", "table": "requests",
+	    "record": {
+	      "trace_id": "tr", "span_id": "sp", "model": "qwen/qwen3-coder",
+	      "input_tokens": 955000, "output_tokens": 82300, "cost_usd": 0.0214,
+	      "requested_at": "2026-07-06T12:00:00Z", "inserted_at": "2026-07-06T12:00:01Z"
+	    },
+	    "old_record": null
+	  }
 	}`)
 
-	var p realtimeInsertPayload
-	if err := json.Unmarshal(payload, &p); err != nil {
-		t.Fatalf("unmarshal payload: %v", err)
+	var payload any
+	if err := json.Unmarshal(frame, &payload); err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
 	}
-	row, err := p.Record.toRequestRow()
-	if err != nil {
-		t.Fatalf("toRequestRow: %v", err)
+	row, ok := insertRow(payload)
+	if !ok {
+		t.Fatal("insertRow returned ok=false for a valid INSERT frame")
 	}
 	if row.TraceID != "tr" || row.SpanID != "sp" || row.Model != "qwen/qwen3-coder" {
 		t.Errorf("decoded record wrong: %+v", row)
 	}
 	if row.InputTokens != 955000 || row.CostUSD != 0.0214 {
 		t.Errorf("decoded sums wrong: %+v", row)
+	}
+	if !row.Live {
+		t.Error("live rows must be flagged Live")
+	}
+	if row.ReceivedAt.IsZero() {
+		t.Error("live rows must be stamped with ReceivedAt")
+	}
+}
+
+func TestInsertRowIgnoresNonInsert(t *testing.T) {
+	// UPDATE/DELETE frames aren't request creations; insertRow must reject
+	// them rather than emit a spurious row (tui/SPEC.md §7 subscribes to
+	// INSERT only, but be defensive about what arrives).
+	frame := []byte(`{"data":{"type":"DELETE","record":null,"old_record":{"trace_id":"x"}}}`)
+	var payload any
+	if err := json.Unmarshal(frame, &payload); err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
+	}
+	if _, ok := insertRow(payload); ok {
+		t.Error("insertRow must reject non-INSERT frames")
 	}
 }
 

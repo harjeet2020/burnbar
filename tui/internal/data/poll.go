@@ -1,8 +1,8 @@
-// Polling LiveSource (tui/SPEC.md §7) — the pre-approved fallback that
-// walks the requests table by inserted_at every 2s. Same rows and latency
-// budget as realtime, just chattier, and built on nothing but net/http,
-// so it is the robust default when WebSockets are unavailable or the
-// pre-v1 realtime SDK proves unreliable.
+// Polling LiveSource (tui/SPEC.md §7) — the manual backup that walks the
+// requests table by inserted_at every 20s. Built on nothing but net/http, so
+// it is the robust fallback when WebSockets are unavailable; the user selects
+// it via live_source="poll" or toggles to it at runtime with `p`. The 20s
+// cadence trades latency for a light footprint appropriate to a backup.
 
 package data
 
@@ -14,11 +14,11 @@ import (
 )
 
 // pollInterval is the cursor-query cadence (tui/SPEC.md §7).
-const pollInterval = 2 * time.Second
+const pollInterval = 20 * time.Second
 
-// pollOfflineAfter is how many consecutive failed polls flip the status
-// from "reconnecting" to "offline". At 2s a poll, ~10s of failures reads
-// as a real outage rather than a blip.
+// pollOfflineAfter is how many consecutive failures flip the status from
+// "reconnecting" to "offline" — shared by both live sources so the meaning
+// stays consistent (realtime reuses it for reconnect-attempt escalation).
 const pollOfflineAfter = 5
 
 // pollSource implements LiveSource over PostgREST cursor queries.

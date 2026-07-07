@@ -127,11 +127,15 @@ func (d dailyDTO) toDailyRow() (core.DailyRow, error) {
 	}, nil
 }
 
-// realtimeInsertPayload is the shape of a postgres_changes INSERT payload:
-// the new row lives under "record" (old_record is empty for an insert).
-// realtime-go hands us this as the event's raw JSON body.
-type realtimeInsertPayload struct {
-	Record requestDTO `json:"record"`
+// postgresChangesPayload is a Supabase Realtime postgres_changes event body
+// as it arrives raw over the Phoenix socket (phx does not pre-unwrap it): the
+// change sits under "data", with "type" naming the operation and the new row
+// under "record" (old_record is empty for an INSERT). See tui/SPEC.md §7.
+type postgresChangesPayload struct {
+	Data struct {
+		Type   string     `json:"type"`
+		Record requestDTO `json:"record"`
+	} `json:"data"`
 }
 
 // decodeRequests unmarshals a PostgREST array of request rows into core

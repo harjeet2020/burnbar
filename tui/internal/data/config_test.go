@@ -2,11 +2,11 @@ package data
 
 import "testing"
 
-// TestLoadDefaultsToPoll pins the live-source default to polling. The
-// realtime-go v0.1.1 go/no-go landed on NO-GO (self-deadlocking reconnect,
-// root SPEC §6), so an unset live_source must resolve to poll — never
-// realtime — to keep the app recoverable out of the box.
-func TestLoadDefaultsToPoll(t *testing.T) {
+// TestLoadDefaultsToRealtime pins the live-source default to realtime. Stage
+// C.1 replaced the abandoned realtime-go with the maintained nshafer/phx
+// transport, so an unset live_source resolves to realtime — the low-latency
+// path — with poll kept as a manual backup (root SPEC §6).
+func TestLoadDefaultsToRealtime(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // no config file → env-only load
 	t.Setenv("BURNBAR_SUPABASE_URL", "https://example.supabase.co")
 	t.Setenv("BURNBAR_SUPABASE_ANON_KEY", "anon-key")
@@ -16,24 +16,24 @@ func TestLoadDefaultsToPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if cfg.LiveSource != LiveSourcePoll {
-		t.Fatalf("default LiveSource = %q, want %q", cfg.LiveSource, LiveSourcePoll)
+	if cfg.LiveSource != LiveSourceRealtime {
+		t.Fatalf("default LiveSource = %q, want %q", cfg.LiveSource, LiveSourceRealtime)
 	}
 }
 
-// TestLoadHonorsRealtimeOptIn confirms realtime is still reachable as an
-// explicit opt-in even though it is no longer the default.
-func TestLoadHonorsRealtimeOptIn(t *testing.T) {
+// TestLoadHonorsPollOptIn confirms poll is still reachable as an explicit
+// opt-in / backup even though it is no longer the default.
+func TestLoadHonorsPollOptIn(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("BURNBAR_SUPABASE_URL", "https://example.supabase.co")
 	t.Setenv("BURNBAR_SUPABASE_ANON_KEY", "anon-key")
-	t.Setenv("BURNBAR_LIVE_SOURCE", "realtime")
+	t.Setenv("BURNBAR_LIVE_SOURCE", "poll")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if cfg.LiveSource != LiveSourceRealtime {
-		t.Fatalf("LiveSource = %q, want %q", cfg.LiveSource, LiveSourceRealtime)
+	if cfg.LiveSource != LiveSourcePoll {
+		t.Fatalf("LiveSource = %q, want %q", cfg.LiveSource, LiveSourcePoll)
 	}
 }

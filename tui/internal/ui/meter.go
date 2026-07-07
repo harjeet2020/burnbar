@@ -225,6 +225,7 @@ func (m Model) renderStatus(width int) string {
 
 	conn := m.renderConn()
 	scale := "scale " + core.FormatTokens(m.scale())
+	source := "source " + m.sourceLabel()
 
 	lastFull, lastCompact := "last request —", "last —"
 	if !m.snap.LastRequestAt.IsZero() {
@@ -247,8 +248,8 @@ func (m Model) renderStatus(width int) string {
 	}
 
 	variants := [][]string{
-		{first, lag, scale, conn},
-		{lastFull, scale, conn},
+		{first, lag, source, scale, conn},
+		{lastFull, source, scale, conn},
 		{lastCompact, scale, conn},
 		{conn},
 	}
@@ -263,6 +264,16 @@ func (m Model) renderStatus(width int) string {
 		}
 	}
 	return " " + conn
+}
+
+// sourceLabel names the active live source for the status row — "realtime"
+// or "poll" — so the `p` toggle's effect is visible independent of the
+// connection chip (which shows health, not which source is running).
+func (m Model) sourceLabel() string {
+	if m.live != nil && m.live.Name() == "realtime" {
+		return "realtime"
+	}
+	return "poll"
 }
 
 // renderConn draws the connection state — symbol + word, colored but

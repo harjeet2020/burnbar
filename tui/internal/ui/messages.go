@@ -13,20 +13,26 @@ import (
 )
 
 // liveStartedMsg delivers the LiveSource's event channel once Start has
-// launched its goroutines.
+// launched its goroutines. gen tags which source generation produced it, so
+// a message from a source the runtime toggle has since replaced is ignored.
 type liveStartedMsg struct {
-	ch <-chan data.LiveEvent
+	ch  <-chan data.LiveEvent
+	gen int
 }
 
 // liveMsg is one event from the LiveSource (a join, a row, or a
-// connection-state change).
+// connection-state change). gen guards against a superseded source.
 type liveMsg struct {
-	ev data.LiveEvent
+	ev  data.LiveEvent
+	gen int
 }
 
-// liveClosedMsg signals the live channel closed (the source stopped) —
-// unexpected under a background context, treated as offline.
-type liveClosedMsg struct{}
+// liveClosedMsg signals the live channel closed (the source stopped). For the
+// current generation that means the feed died (treated as offline); for a
+// superseded generation it is the expected result of a toggle and ignored.
+type liveClosedMsg struct {
+	gen int
+}
 
 // baselineMsg carries the result of a usage_daily baseline fetch.
 type baselineMsg struct {

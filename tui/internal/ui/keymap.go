@@ -14,15 +14,16 @@ import (
 // excluded from all help output: ctrl+z is terminal muscle memory, not a
 // feature to advertise.
 type KeyMap struct {
-	Up        key.Binding
-	Down      key.Binding
-	Details   key.Binding
-	Back      key.Binding
-	Timeframe key.Binding
-	Refresh   key.Binding
-	Help      key.Binding
-	Quit      key.Binding
-	Suspend   key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	Details      key.Binding
+	Back         key.Binding
+	Timeframe    key.Binding
+	Refresh      key.Binding
+	ToggleSource key.Binding
+	Help         key.Binding
+	Quit         key.Binding
+	Suspend      key.Binding
 
 	// selectHint is display-only: it folds Up+Down into the single
 	// "↑/↓ select" entry the hint row shows (the real bindings stay
@@ -57,6 +58,10 @@ func newKeyMap(g Glyphs) KeyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh"),
 		),
+		ToggleSource: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "source"),
+		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -78,13 +83,13 @@ func newKeyMap(g Glyphs) KeyMap {
 // MeterHelp is the hint row on the main screen (tui/SPEC.md §2 mock:
 // "↑/↓ select · enter details · t window · r refresh · ? help · q quit").
 func (k KeyMap) MeterHelp() []key.Binding {
-	return []key.Binding{k.selectHint, k.Details, k.Timeframe, k.Refresh, k.Help, k.Quit}
+	return []key.Binding{k.selectHint, k.Details, k.Timeframe, k.Refresh, k.ToggleSource, k.Help, k.Quit}
 }
 
 // DetailsHelp is the context hint row on the details screen
 // (tui/SPEC.md §2: "esc back · t window · r refresh · q quit").
 func (k KeyMap) DetailsHelp() []key.Binding {
-	return []key.Binding{k.Back, k.Timeframe, k.Refresh, k.Quit}
+	return []key.Binding{k.Back, k.Timeframe, k.Refresh, k.ToggleSource, k.Quit}
 }
 
 // FullHelp feeds the `?` overlay: every binding, grouped navigate /
@@ -92,7 +97,7 @@ func (k KeyMap) DetailsHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.selectHint, k.Details, k.Back},
-		{k.Timeframe, k.Refresh},
+		{k.Timeframe, k.Refresh, k.ToggleSource},
 		{k.Help, k.Quit},
 	}
 }
