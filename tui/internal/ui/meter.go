@@ -40,6 +40,9 @@ func (m Model) renderHeader() string {
 	if m.snap.Credits != nil {
 		creditsRight += th.Muted.Render(g.Sep + core.FormatAge(time.Since(m.snap.CreditsAt)))
 	}
+	if m.creditsHint != "" {
+		creditsRight += th.Muted.Render(g.Sep + m.creditsHint)
+	}
 	row1 := leftRight(m.width, th.AccentPrimary.Bold(true).Render(g.Wordmark), creditsRight)
 
 	selector, _ := m.timeframeSelector()
@@ -82,8 +85,17 @@ func (m Model) renderBars(l layout) []string {
 	models := m.snap.Models
 
 	if len(models) == 0 {
-		empty := m.theme.Muted.Render("no usage in this window yet")
-		block := lipgloss.Place(m.width, l.listHeight, lipgloss.Center, lipgloss.Center, empty)
+		// Distinguish "still loading the first baseline" from a genuinely
+		// empty window (tui/SPEC.md §7 startup, §8 empty state).
+		text := "no usage in this window yet"
+		if m.loading {
+			text = "connecting…"
+			if m.glyphs.Arrow == ">" { // ASCII mode
+				text = "connecting..."
+			}
+		}
+		msg := m.theme.Muted.Render(text)
+		block := lipgloss.Place(m.width, l.listHeight, lipgloss.Center, lipgloss.Center, msg)
 		return strings.Split(block, "\n")
 	}
 
@@ -226,8 +238,16 @@ func (m Model) renderStatus(width int) string {
 		lag = "lag " + core.FormatDuration(time.Duration(*m.snap.LagSeconds*float64(time.Second)))
 	}
 
+	// When a fetch is failing but stale data is still shown, badge its age
+	// so the numbers aren't mistaken for live (tui/SPEC.md §8). It rides on
+	// the fullest variant and drops first under width pressure.
+	first := lastFull
+	if m.dataErr != "" && !m.dataAt.IsZero() {
+		first = "data from " + core.FormatClock(m.dataAt) + g.Sep + lastFull
+	}
+
 	variants := [][]string{
-		{lastFull, lag, scale, conn},
+		{first, lag, scale, conn},
 		{lastFull, scale, conn},
 		{lastCompact, scale, conn},
 		{conn},

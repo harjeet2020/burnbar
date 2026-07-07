@@ -59,17 +59,17 @@ Four fixed regions, top to bottom — **regions never move or reorder**:
    `▼ 3 more` / `▲ 2 more` edge indicators.
 3. **Status row:** last-request wall time + relative age, meter lag
    (§7), the current bar scale (`scale 2M`, muted — see §3), connection
-   state: `● live` (realtime healthy), `◌ polling` (fallback active),
-   `○ reconnecting…` (with retry countdown), `✗ offline`. Symbols +
-   words, never color alone.
+   state: `● live` (realtime healthy), `◌ polling` (poll mode, chosen
+   via `p`), `○ reconnecting…` (with retry countdown), `✗ offline`.
+   Symbols + words, never color alone.
 4. **Hint row:** the core bindings rendered by the `help` bubble from
    the central keymap. `?` toggles the expanded help overlay.
 
 **Keymap:** `t` cycle timeframe · `↑/↓` or `j/k` select · `enter`/`l`
-details · `esc`/`h` back · `r` refresh · `?` help · `q`/`ctrl+c` quit.
-Single-key timeframe cycling replaces the earlier `d`/`w`/`m` bindings —
-one key to remember, three states, and the header always shows where
-you are.
+details · `esc`/`h` back · `r` refresh · `p` toggle live source
+(realtime ↔ poll) · `?` help · `q`/`ctrl+c` quit. Single-key timeframe
+cycling replaces the earlier `d`/`w`/`m` bindings — one key to remember,
+three states, and the header always shows where you are.
 
 **Mouse (augmentation, never required):** wheel scrolls the list; click
 selects a bar; click on the already-selected bar (or double-click) opens
@@ -316,29 +316,38 @@ details screen too.
    brief double-count self-heals, silent undercount doesn't).
 4. Fetch credits in parallel.
 
-### Realtime, and the pre-approved fallback
+### Realtime (via phx), and the manual poll backup
 
-Primary: `supabase-community/realtime-go` — Phoenix-channel WebSocket to
-`wss://<ref>.supabase.co/realtime/v1/websocket`, `postgres_changes`
-INSERT on `public.requests`, heartbeats, and reconnect with exponential
-backoff + jitter (1 s → 30 s cap). **On every successful (re)join:
-refetch baseline + today-slice and clear live rows** — events missed
-while disconnected are healed by re-baselining, so gap tracking is
+Primary: a Phoenix-channel WebSocket to
+`wss://<ref>.supabase.co/realtime/v1/websocket` carrying
+`postgres_changes` INSERT on `public.requests`. **On every successful
+(re)join: refetch baseline + today-slice and clear live rows** — events
+missed while disconnected are healed by re-baselining, so gap tracking is
 never needed.
 
-The **fallback is insurance against realtime-go itself** — it is a
-community-maintained SDK, not an official Supabase client, so the root
-spec pre-approved a plan B: poll PostgREST
-(`requests?inserted_at=gt.<last>`) every 2 s — same rows, same latency
-budget, just chattier. Both live behind a small **`LiveSource`
-interface** (emits request-row events + connection-state changes), so
-swapping is a one-line default change plus a config override
-(`live_source = "realtime" | "poll"`, default realtime) as an escape
-hatch for users whose networks fight WebSockets. Stage C starts with a
-spike: subscribe with realtime-go against the live project, receive a
-real INSERT, survive a laptop sleep/wake. Go/no-go decides the default;
-**record the outcome in root-spec §6 either way.** The `◌ polling`
-status state (§2) keeps the active source honest on screen.
+The transport is **`github.com/nshafer/phx`**, a maintained general Go
+Phoenix Channels client. The original `supabase-community/realtime-go`
+proved a no-go: its reconnect self-deadlocks and it logs to stderr
+(corrupting the alt-screen) — see root §6. phx gives us heartbeats,
+reconnect-with-backoff, channel rejoin, and a silent default logger as
+first-class features, so we own only a thin Supabase framing layer on top
+(the `phx_join` payload carrying `config.postgres_changes` +
+`access_token`, and decoding INSERT payloads through the existing
+`requestDTO`). Making that swap is the next task (Stage C.1).
+
+**Poll is a manual backup, not a silent fallback.** Both sources sit
+behind the same **`LiveSource` interface** (emits request-row events +
+connection-state changes), but rather than auto-switching on a
+hard-to-observe heuristic, the user drives it: `live_source` sets the
+startup source, and the in-app **`p`** key toggles realtime ↔ poll at
+runtime. If realtime ever misbehaves, you *see* it (the status row
+degrades) and flip to poll yourself — no hidden state machine deciding
+for you. The poll source queries PostgREST
+(`requests?inserted_at=gt.<last>`) every **20 s** — deliberately slower
+than realtime, sized as a low-cost backup that stays gentle on the free
+tier (a 2 s poll running all day is ~1.3M requests/month of mostly-empty
+responses; 20 s is ~10× lighter). The `◌ polling` status state (§2) keeps
+the active source honest on screen.
 
 ### Credits
 
@@ -390,7 +399,7 @@ vars override file values:
 | `supabase_url` | `BURNBAR_SUPABASE_URL` | yes |
 | `supabase_anon_key` | `BURNBAR_SUPABASE_ANON_KEY` | yes |
 | `openrouter_api_key` | `BURNBAR_OPENROUTER_API_KEY` | no — credits header shows `—` with a hint when absent |
-| `live_source` | `BURNBAR_LIVE_SOURCE` | no — `realtime` (default) or `poll` |
+| `live_source` | `BURNBAR_LIVE_SOURCE` | no — sets the *startup* source (`poll` \| `realtime`); toggle at runtime with `p`. Default `poll` today, `realtime` once Stage C.1 lands |
 
 Missing-config error message includes a ready-to-paste TOML template.
 The repo `.env` maps onto the env overrides for dev convenience.
@@ -458,7 +467,26 @@ bar geometry), `internal/data` (config, PostgREST, credits, LiveSource
 + both impls), `internal/ui` (model/update/view split, styles/tokens,
 keymap, screens). Everything in `core` is testable with `go test` alone.
 
+Each stage below opens with a **Goal** (what we're actually trying to
+achieve, and why this stage exists as its own unit of work) and a
+**Done when** (the observable, measurable bar that says the stage is
+finished — the thing you check, not just a feeling). The checklist under
+each is the *how*; the Goal and Done-when are the *what* and *why*, and
+they ladder up to the Phase-2 definition of done at the very bottom.
+
 ### Stage A — Shell ✅ (2026-07-05)
+
+**Goal:** Stand up a real, running terminal app you can look at and
+click around — the whole four-region layout, at every screen size,
+driven entirely by fake data — so the *shape* of the product is settled
+and agreed before a single real number flows through it. Cheapest place
+to get the visual and interaction design right is against fixtures.
+
+**Done when:** `burnbar` launches on the alt screen, renders the full
+layout at every breakpoint (and the too-small state), quits / suspends /
+resizes cleanly, and both mouse and keyboard navigation reach the
+details stub — all from fixture data.
+
 - [x] Go module scaffold; Bubble Tea v2 program on the alt screen;
   clean quit (`q`/`ctrl+c`), suspend/resume, resize handling
   — suspend needs an explicit `ctrl+z → tea.Suspend` binding in v2
@@ -484,6 +512,19 @@ them with its test suite. A details-screen *stub* exists so the
 enter/click-through navigation is real; Stage E replaces its body.
 
 ### Stage B — Pure core ✅ (2026-07-05)
+
+**Goal:** Get the arithmetic provably right in complete isolation. Every
+calculation the app will ever trust — dedupe, window cuts, aggregation,
+ratios, bar geometry, formatting — nailed down and covered by tests
+before any network or terminal I/O can muddy it. This is the brain of
+the app; if it's wrong, nothing downstream can be right, and bugs here
+are far cheaper to catch with `go test` than through the UI.
+
+**Done when:** `go test ./internal/core` is green across the whole suite
+(~160 cases), `go vet` / `go build` are clean, and every spec rule that
+math depends on (§3 bars, §7 windows/aggregation, §9 formatting) has a
+test that would fail if the rule broke.
+
 - [x] Domain types; window math — local today, UTC week/month, both
   rollovers, DST edge cases — `rows.go` (RequestRow/DailyRow mirroring
   the SQL surfaces + RowStore dedupe map with live-wins merge: a live
@@ -519,21 +560,114 @@ row accents nothing — no fallback). `windows_test.go` imports
 `time/tzdata` so zone tests are hermetic.
 
 ### Stage C — Data
-- [ ] PostgREST baseline fetch (all `usage_daily` columns, 30 days) +
-  today-slice fetch (raw `requests` since local midnight)
-- [ ] Credits client + full cadence (§7: launch / refresh /
+
+**Goal:** Make the numbers real. Swap fixtures for your actual
+OpenRouter usage: fetch the real baseline + today-slice, wire the tested
+`Aggregate()` in place of `Fixture()`, prove the realtime pipeline
+delivers a live request end-to-end, and decide *with evidence* whether
+the realtime SDK can be the default `LiveSource`. This is the moment the
+app stops being a mockup and starts metering the real world — and the
+highest-risk unknown (does the community realtime SDK survive a
+sleep/wake?) gets resolved up front. **Outcome:** `realtime-go` was a
+no-go; poll ships as the interim default and the realtime path moves to
+`phx` in Stage C.1 (see §7, root §6).
+
+**Done when:** launching against your own Supabase project shows your
+real per-model usage, and firing an OpenRouter request makes a new row
+arrive in the app within a few seconds — surviving at least one
+disconnect/reconnect and a laptop sleep/wake via re-baselining. The
+realtime-go go/no-go outcome is recorded in root-spec §6, and the
+credits burst-debounce timer is unit-tested against the §7 worked
+example.
+
+- [x] PostgREST baseline fetch (all `usage_daily` columns, 30 days) +
+  today-slice fetch (raw `requests` since local midnight) —
+  `internal/data/rest.go` + tagged DTOs (`dto.go`) mapping into core with
+  NULL-vs-0 pointer discipline; `Fixture()` swapped for `Aggregate()` via
+  `Model.rebuilt()`
+- [x] Credits client + full cadence (§7: launch / refresh /
   burst-grouped post-event debounce / 5-min heartbeat) + always-on age
   display; unit-test the burst-grouping timer logic (the A/B/C example
-  in §7 is the test case)
-- [ ] **realtime-go spike against the live project** — subscribe,
-  receive a real INSERT, survive sleep/wake; go/no-go decides the
-  default `LiveSource` (record in root-spec §6)
-- [ ] `LiveSource` interface + realtime impl + 2 s polling impl +
-  `live_source` config override
-- [ ] Startup sequence wired (subscribe → baseline+slice ∥ credits),
-  loading states, reconnect with re-baseline
+  in §7 is the test case) — `credits.go` + pure `credits_sched.go`
+  (id-tagged ticks tolerate un-cancelable `tea.Tick`); heartbeat is
+  gen-guarded in the UI
+- [x] **realtime-go spike against the live project — NO-GO** (2026-07-06).
+  Live INSERT arrived, but the socket then closed with
+  `StatusNormalClosure` and realtime-go v0.1.1 could not reconnect:
+  `reconnect()` sets `isReconnecting=true` and calls `Connect()`, which
+  rejects with `"client is already reconnecting"` when that flag is set —
+  a self-deadlock that fails all 5 retries every time. It also logged to
+  stderr and corrupted the alt-screen. **Default flipped to `poll`**;
+  standard logger discarded in `main()`. Full verdict in root-spec §6.
+- [x] `LiveSource` interface + realtime impl + 2 s polling impl +
+  `live_source` config override — `live.go`/`poll.go`/`realtime.go`;
+  factory falls back to poll for non-`*.supabase.co` hosts
+- [x] Startup sequence wired (subscribe → baseline+slice ∥ credits),
+  loading states, reconnect with re-baseline — `Init()` starts the feed;
+  the first/every `LiveJoined` triggers baseline+slice (subscribe before
+  fetch); `r` re-baselines and resets the accent anchor
+
+Stage C notes: `internal/core` stayed network-free — I/O and JSON tags
+live entirely in `internal/data`, mapping into the existing core types.
+New core helper `SnapshotMeta`/`LatestLive` (`meta.go`) derives the
+status-row last-request + meter-lag purely. Money `numeric` decodes to
+float64 (root §6). Accent anchor is a simple app-start/refresh timestamp
+for now — the rolling 5-min floor + focus-gain reset is Stage D, as are
+springs, the 15s relative-time ticker, and the local-/UTC-midnight
+rollover timers (window *math* already exists in core; only the timers
+are deferred). Verified offline: `go build`/`vet`/`test` green (new tests
+for the DTO NULL-vs-0 decode, the §7 credits-debounce example incl. both
+guards, and `SnapshotMeta`), plus a VHS smoke run of the real binary
+against a dead-endpoint poll config confirming the loading→reconnecting
+render path and the credits/no-key hint. realtime-go v0.1.1 limitations
+(broken channel rejoin, capped retries, optimistic subscribe) documented
+in `realtime.go` and root §6 — the spike is the go/no-go.
+
+### Stage C.1 — Realtime via phx (next)
+
+**Goal:** replace the broken `realtime-go` with a WebSocket path that
+survives socket drops and laptop sleep/wake, so realtime can be the
+default again — the low-latency, near-zero-egress source a leave-open
+meter wants (root §6 no-go; §7). Polling stays only as a *manual* backup,
+never a silent auto-fallback.
+
+**Done when:** a live INSERT lights a bar within ~1–2 s; the socket
+recovers on its own across a network blip and a sleep/wake (the exact
+thing realtime-go failed); nothing the library logs ever touches the
+alt-screen; and `p` toggles realtime ↔ poll live.
+
+- [ ] Swap `supabase-community/realtime-go` → `github.com/nshafer/phx`;
+  rewrite `realtime.go`'s internals against it — the `LiveSource`
+  interface, `poll.go`, and all UI wiring stay unchanged
+- [ ] Send the Supabase `phx_join` payload (`config.postgres_changes`
+  INSERT on `public.requests` + `access_token`); decode INSERTs through
+  the existing `requestDTO`; point phx's logger at the debug file, never
+  stderr
+- [ ] Poll backup: flat **20 s** interval (down from 2 s) — it is the
+  manual backup, not an auto-fallback
+- [ ] Add the `p` key to toggle the live source at runtime; reflect the
+  active source in the status row + hint bar
+- [ ] Flip the default back to `realtime`; keep `poll` as the override
+- [ ] Verify live: a real INSERT, a network blip, and a sleep/wake;
+  record the go/no-go in root §6
 
 ### Stage D — Live UX
+
+**Goal:** Make it feel *alive on events and calm at rest* — the two
+things a glanceable, always-open meter lives or dies by. A request
+landing should be unmistakably *seen* (motion + accent highlight); an
+idle app should burn zero frames, never flicker, and never accumulate
+false "new" highlights while it sits unfocused beside your working
+terminal. This is where the raw data from Stage C becomes a pleasant
+companion you can leave open all day.
+
+**Done when:** a landing request animates its bar toward the new target
+and highlights the new slice (accent2, with its ~1 s emphasis); a scale
+step reads as one collective zoom-out rather than a ripple; the status
+row honestly reflects connection state, meter lag, and staleness; and at
+rest the app provably renders at 0 fps (no tick loop, no CPU) between the
+slow 15 s timestamp refreshes.
+
 - [ ] Focus anchor: rolling 5-min `accentWindow` + focus-gain reset,
   anchor-independent accent2 (§5); verify v2 focus-report API; tune the
   window constant by feel; tmux note in docs
@@ -544,11 +678,39 @@ row accents nothing — no fallback). `windows_test.go` imports
   rollover timers
 
 ### Stage E — Details screen
+
+**Goal:** Answer the follow-up question the main screen deliberately
+raises — "where *exactly* is this model's money going?" — with the full
+per-model breakdown the raw rows already carry: cache hit rate, reasoning
+share, effective $/1M rates, average duration, and the provider split.
+The main screen stays a calm summary; this is where the curious user
+drills in without cluttering it.
+
+**Done when:** pressing enter (or click-through) on any model opens its
+details screen, every §2 stat renders correctly with `—` for
+unreported/NULL-derived values (never 0), the provider split table is
+right and cost-sorted, and live events update an open details screen in
+place.
+
 - [ ] Drill-down navigation (selection ↔ details, live updates in place)
 - [ ] Stats grid + provider split table per §2, `—` for NULL-derived
   values
 
 ### Stage F — Hardening & polish
+
+**Goal:** Make it robust and documented enough to hand to a stranger who
+will self-host it unaided. Every designed-for failure degrades *visibly*
+instead of crashing, the main screens are locked down against regression
+by golden tests, and the docs carry someone from `git clone` to live
+bars. This is the difference between "works on my machine" and
+"shippable open-source tool".
+
+**Done when:** the full §8 failure table has been walked against the live
+backend (killed network, paused project, bad keys) with every row
+behaving exactly as specified, golden-render tests pass for the
+main-screen states (color profile pinned), the VHS smoke shots render,
+and the config / tmux focus-events / debug-logging docs are written.
+
 - [ ] Walk the full §8 failure table against the live backend (kill
   network, pause project, bad keys)
 - [ ] Golden-render tests via teatest/v2 (`WithInitialTermSize(80,24)`,

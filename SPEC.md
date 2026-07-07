@@ -241,3 +241,24 @@ this file's git history, pre-2026-07-06.)
   a JSON snapshot cache is the pre-approved polish if launch feels slow.
 - **Privacy Mode required in setup** — Burnbar never needs
   prompt/completion content.
+- **Live layer: realtime + polling behind one `LiveSource`** (built in
+  TUI Stage C). Both implementations ship; `live_source` config selects
+  the mechanism. The 2s PostgREST poll is the **default** — robust and
+  fully under our control; the `realtime` path (wrapping
+  `supabase-community/realtime-go`) is an **opt-in** kept for when the
+  library is fixed or replaced.
+- **realtime-go go/no-go: NO-GO** (decided by the live spike, 2026-07-06).
+  v0.1.1 (pre-v1) has a *structurally impossible* reconnect: on any
+  socket close, `handleMessages()` calls `reconnect()`, which sets
+  `isReconnecting=true` and then loops calling `Connect()` — but
+  `Connect()` returns `"client is already reconnecting"` whenever that
+  flag is set. So every retry fails instantly and it gives up after
+  `MaxRetries` (5), permanently. Observed live: one Supabase
+  `StatusNormalClosure` killed the feed, then 5×
+  `"client is already reconnecting"` → `"Failed to reconnect after 5
+  attempts"`. It also logs through `log.Default()` (stderr), which paints
+  over the alt-screen TUI (bars vanished) — now neutralized by discarding
+  the standard logger in `main()`. Neither defect is fixable through the
+  library's public API. **Decision:** default flipped to `poll` (done);
+  `realtime` remains available but is not recommended until the upstream
+  reconnect is fixed or we ship our own thin Phoenix client.

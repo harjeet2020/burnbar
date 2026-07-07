@@ -33,7 +33,8 @@ supabase_anon_key = "YOUR-ANON-KEY"
 openrouter_api_key = ""
 
 # Optional: how live request events reach the app.
-#   "realtime" (default) — Supabase Realtime WebSocket, lowest latency
-#   "poll"               — 2s PostgREST polling; escape hatch for
-#                          networks that fight WebSockets
-live_source = "realtime"
+#   "poll"     (default) — 2s PostgREST polling; robust and recommended
+#   "realtime"           — Supabase Realtime WebSocket (opt-in). The
+#                          realtime-go v0.1.1 library cannot recover from a
+#                          dropped socket, so poll is preferred for now.
+live_source = "poll"

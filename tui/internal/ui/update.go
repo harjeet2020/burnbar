@@ -5,16 +5,20 @@
 package ui
 
 import (
+	"errors"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/harjeet2020/burnbar/tui/internal/core"
+	"github.com/harjeet2020/burnbar/tui/internal/data"
 )
 
-// Update routes messages to the focused handler. It stays non-blocking:
-// nothing here does I/O (there is none in Stage A anyway).
+// Update routes messages to the focused handler. Input handlers are pure
+// state transitions; the data handlers fold fetch/live results into the
+// stores and re-derive the snapshot (tui/SPEC.md §7). I/O only ever
+// happens inside the tea.Cmds these return, never inline.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -29,8 +33,143 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleClick(msg)
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg)
+
+	// --- Data layer (Stage C) -------------------------------------------
+	case liveStartedMsg:
+		m.liveCh = msg.ch
+		return m, waitLiveCmd(m.liveCh)
+	case liveMsg:
+		return m.handleLive(msg.ev)
+	case liveClosedMsg:
+		m.conn = core.ConnOffline
+		return m.rebuilt(time.Now()), nil
+	case baselineMsg:
+		return m.handleBaseline(msg)
+	case todaySliceMsg:
+		return m.handleTodaySlice(msg)
+	case baselineRetryMsg:
+		return m, m.fetchBaselineCmd()
+	case sliceRetryMsg:
+		return m, m.fetchTodaySliceCmd()
+	case creditsMsg:
+		return m.handleCredits(msg)
+	case creditTickMsg:
+		return m.handleCreditTick(msg)
+	case heartbeatMsg:
+		if msg.gen != m.heartbeatGen || m.credits == nil {
+			return m, nil // a since-reset heartbeat, or credits disabled
+		}
+		return m, m.fetchCreditsCmd()
 	}
 	return m, nil
+}
+
+// handleLive folds one live event into the model (tui/SPEC.md §7). A join
+// re-baselines (clearing stale live rows first); a row is deduped in and
+// nudges the credits debounce; a bare connection change updates the chip.
+// Every branch re-arms waitLiveCmd to keep the feed flowing.
+func (m Model) handleLive(ev data.LiveEvent) (tea.Model, tea.Cmd) {
+	switch ev.Kind {
+	case data.LiveJoined:
+		m.conn = ev.State
+		// Missed events while disconnected are healed by re-baselining,
+		// so stale live rows go and the baseline+slice are refetched.
+		m.rows.ClearLive()
+		m = m.rebuilt(time.Now())
+		return m, tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh))
+	case data.LiveRow:
+		now := time.Now()
+		m.rows.Upsert(ev.Row)
+		m = m.rebuilt(now)
+		cmds := []tea.Cmd{waitLiveCmd(m.liveCh)}
+		cmds = append(cmds, m.onCreditEvent(now)...)
+		return m, tea.Batch(cmds...)
+	default: // data.LiveConn
+		m.conn = ev.State
+		return m.rebuilt(time.Now()), waitLiveCmd(m.liveCh)
+	}
+}
+
+// handleBaseline stores a fresh baseline (or keeps the stale one and
+// schedules a retry on failure — tui/SPEC.md §8).
+func (m Model) handleBaseline(msg baselineMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.dataErr = truncateErr(msg.err)
+		return m, delayMsg(baselineBackoff, baselineRetryMsg{})
+	}
+	m.baseline = msg.rows
+	m.loading = false
+	m.dataErr = ""
+	m.dataAt = time.Now()
+	return m.rebuilt(time.Now()), nil
+}
+
+// handleTodaySlice folds the fetched raw rows into the store (as fetched,
+// not live) or schedules a retry.
+func (m Model) handleTodaySlice(msg todaySliceMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.dataErr = truncateErr(msg.err)
+		return m, delayMsg(sliceBackoff, sliceRetryMsg{})
+	}
+	for _, r := range msg.rows {
+		m.rows.Upsert(r)
+	}
+	m.loading = false
+	m.dataErr = ""
+	return m.rebuilt(time.Now()), nil
+}
+
+// handleCredits folds a credits result in and re-arms the idle heartbeat
+// (which resets on any completed poll, success or failure — tui/SPEC.md §7).
+func (m Model) handleCredits(msg creditsMsg) (tea.Model, tea.Cmd) {
+	m.heartbeatGen++
+	hb := armHeartbeat(m.heartbeatGen)
+
+	if msg.err != nil {
+		if errors.Is(msg.err, data.ErrCreditsUnauthorized) {
+			m.creditsHint = "check openrouter_api_key"
+		} else {
+			m.creditsHint = "credits unavailable"
+		}
+		// Keep the last value with its growing age (tui/SPEC.md §7/§8).
+		return m.rebuilt(time.Now()), hb
+	}
+	bal := msg.balance
+	m.creditsVal = &bal
+	m.creditsAt = msg.at
+	m.creditsHint = ""
+	return m.rebuilt(time.Now()), hb
+}
+
+// handleCreditTick fires a credits poll if the tick is still current
+// (not superseded by a push or merge — the scheduler decides).
+func (m Model) handleCreditTick(msg creditTickMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	for _, a := range m.sched.OnTick(msg.id, time.Now()) {
+		if a.PollNow {
+			cmds = append(cmds, m.fetchCreditsCmd())
+		}
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// onCreditEvent runs the burst debounce for a broadcast event and turns
+// its actions into commands (a poll and/or a re-armed tick). No-op when
+// credits are disabled.
+func (m Model) onCreditEvent(now time.Time) []tea.Cmd {
+	if m.credits == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, a := range m.sched.OnEvent(now) {
+		if a.PollNow {
+			cmds = append(cmds, m.fetchCreditsCmd())
+		}
+		if !a.ArmTickAt.IsZero() {
+			cmds = append(cmds, armCreditTick(a))
+		}
+	}
+	return cmds
 }
 
 // currentLayout resolves geometry for the current size and model count.
@@ -64,8 +203,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Timeframe):
 		m = m.setTimeframe(m.tf.Next())
 	case key.Matches(msg, k.Refresh):
-		// Stage C wires the real refresh (re-baseline + credits poll);
-		// deliberately inert until then.
+		return m.refresh()
 	case m.scr == screenMeter && key.Matches(msg, k.Up):
 		m = m.moveSelection(-1)
 	case m.scr == screenMeter && key.Matches(msg, k.Down):
@@ -81,20 +219,31 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // setTimeframe switches the window: pure client-side re-aggregation —
-// instant, no refetch (tui/SPEC.md §7). Selection follows the model name;
-// when it left the window, fall back to the top model.
+// instant, no refetch (tui/SPEC.md §7). rebuilt handles the selection and
+// scroll repair for the new model list.
 func (m Model) setTimeframe(tf core.Timeframe) Model {
 	m.tf = tf
-	m.snap = core.Fixture(tf, time.Now())
-	if m.selectedIndex() < 0 {
-		m.selected = ""
-		if len(m.snap.Models) > 0 {
-			m.selected = m.snap.Models[0].Name
+	return m.rebuilt(time.Now())
+}
+
+// refresh re-baselines the world (tui/SPEC.md §5/§7): drop all rows and
+// reset the accent anchor (clearing highlights), then refetch the
+// baseline, today-slice, and credits. Stale data stays on screen until
+// the fresh data lands.
+func (m Model) refresh() (tea.Model, tea.Cmd) {
+	m.rows.Clear()
+	m.anchor = time.Now()
+	m = m.rebuilt(time.Now())
+
+	cmds := []tea.Cmd{m.fetchBaselineCmd(), m.fetchTodaySliceCmd()}
+	if m.credits != nil {
+		for _, a := range m.sched.OnManualRefresh(time.Now()) {
+			if a.PollNow {
+				cmds = append(cmds, m.fetchCreditsCmd())
+			}
 		}
 	}
-	m.scroll = m.currentLayout().clampScroll(m.scroll)
-	m = m.ensureSelectionVisible()
-	return m
+	return m, tea.Batch(cmds...)
 }
 
 // moveSelection moves the selection by delta rows, clamped, and keeps it

@@ -6,6 +6,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -23,6 +25,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	// The terminal is the UI: once the alternate screen is entered, ANY
+	// write to stdout/stderr paints garbage over it. The standard logger
+	// defaults to stderr, and third-party libraries (e.g. realtime-go) log
+	// through it, so we silence it up front. Debug mode redirects it to a
+	// file below instead of discarding it (tui/SPEC.md §8).
+	log.SetOutput(io.Discard)
 
 	// Debug logging goes to a file, never stdout — the terminal is the
 	// UI (tui/SPEC.md §8). Enable with BURNBAR_DEBUG=1 and `tail -f` the

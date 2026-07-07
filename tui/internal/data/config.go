@@ -15,9 +15,12 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// LiveSource values accepted by the live_source config key. The realtime
-// WebSocket is the default; polling is the pre-approved escape hatch for
-// networks that fight WebSockets (root SPEC §6).
+// LiveSource values accepted by the live_source config key. Polling is the
+// default: the realtime-go v0.1.1 dependency has a self-deadlocking reconnect
+// (its reconnect() sets isReconnecting=true, which Connect() then rejects on),
+// so it cannot recover from any socket drop — a confirmed no-go for an
+// always-on meter (root SPEC §6). "realtime" stays available as an opt-in for
+// when that library is fixed or replaced.
 const (
 	LiveSourceRealtime = "realtime"
 	LiveSourcePoll     = "poll"
@@ -37,8 +40,8 @@ type Config struct {
 	// directly from this machine. Optional: when absent the credits header
 	// shows "—" with a hint.
 	OpenRouterAPIKey string `toml:"openrouter_api_key"`
-	// LiveSource selects the live event mechanism: "realtime" (default) or
-	// "poll".
+	// LiveSource selects the live event mechanism: "poll" (default) or
+	// "realtime".
 	LiveSource string `toml:"live_source"`
 }
 
@@ -84,8 +87,8 @@ Paste this template into the file and fill in your values:
     # https://openrouter.ai/settings/keys
     openrouter_api_key = ""
 
-    # Optional — "realtime" (default) or "poll".
-    live_source = "realtime"
+    # Optional — "poll" (default) or "realtime".
+    live_source = "poll"
 `, e.Path))
 	return b.String()
 }
@@ -137,7 +140,7 @@ func Load() (Config, error) {
 	applyEnvOverrides(&cfg)
 
 	if cfg.LiveSource == "" {
-		cfg.LiveSource = LiveSourceRealtime
+		cfg.LiveSource = LiveSourcePoll
 	}
 
 	if problems := validate(cfg); len(problems) > 0 {
