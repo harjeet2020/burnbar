@@ -61,8 +61,10 @@ What Phases 2 & 4 build against (column details: see the migration):
   model total.
 - **Live layer:** Realtime INSERT events on `requests` (one row per
   event), layered in memory on top of the baseline. A refresh discards
-  the deltas and re-baselines. Events also drive the accent1/accent2
-  highlight UX.
+  the deltas and re-baselines. Live events also drive the latest-burst
+  highlight + recent-request modal (`tui/SPEC.md` §5/§7, 2026-07-08
+  revision — one highlight of the most recent coalesced burst, replacing
+  the earlier accent1/accent2 + focus design).
 - **Subscribe before fetch:** a row landing mid-fetch is briefly
   double-counted and self-heals on the next refresh; fetch-first would
   silently undercount until then. Brief overcount beats silent

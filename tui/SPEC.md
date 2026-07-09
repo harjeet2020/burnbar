@@ -28,48 +28,89 @@ changed materially.
 
 ```
  ▂▄▆ burnbar                            credits  $12.43 · 2m
+
  [today]  week  month                        spent  $1.2345
 
  deepseek/deepseek-v4-flash    1.2M in · 340.2K out  $0.4821
- ████████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓██
+ ███▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▊
 
  anthropic/claude-haiku-4.5    210.4K in · 88.1K out $0.3110
- ████▒▒▒▒▒▒
+ ██▒▒▒▒▒▒▒▒▒▒▒▒▒▊
 
  qwen/qwen3-coder               955.0K in · 82.3K out $0.0214
- █████████████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+ ▊
 
- last request 12:04:32 (2m ago) · lag 2.1s · scale 2M · ● live
- ↑/↓ select · enter details · t window · r refresh · ? help · q quit
+ last request 12:04:32 (2m ago) · lag 2.1s · scale $1 · ● live
+ j/k select · enter details · t window · m mode · ? help · q quit
 ```
 
-Four fixed regions, top to bottom — **regions never move or reorder**:
+Four fixed regions, top to bottom — **regions never move or reorder**.
+Notes on this sketch:
+- It shows the default **cost mode** (§3): the header reads `spent $…`,
+  the status scale chip is dollar-denominated (`scale $1`), and bar
+  **length is proportional to cost**, so `qwen` — a huge *token*
+  workhorse (955K) but nearly free ($0.02) — is a cost stub. Press `m`
+  for token mode, where `qwen` would be one of the longest bars. That
+  stub is exactly what manual zoom (`-`/`+`, §3) expands to compare.
+- Plain monospace can't show color, so the latest-burst highlight isn't
+  visible here: on screen, the input segment's trailing cells render in
+  bright cyan and the tail's cells in bright blue — the last burst's
+  input and output (cost, in this mode), §5. The `▊` at each bar's
+  leading edge is the sub-cell fractional animation tip — §6.
 
-1. **Header (2 rows):** wordmark left (`▂▄▆ burnbar` — the glyph is a
+1. **Header (3 rows):** wordmark left (`▂▄▆ burnbar` — the glyph is a
    tiny bar-chart motif; drop the glyph in ASCII fallback). Right-aligned
-   column: credits balance **with its age** (row 1) and total spend for
-   the active window (row 2). Row 2 left: the timeframe selector — three
-   labels with the active one highlighted (reverse video), the others
-   muted; **`t` cycles** today → week → month → today.
+   column: credits balance **with its age** (row 1) and the active
+   window's total in the active mode's unit (row 3) — `spent $1.2345`
+   in cost mode, `used 1.5M` in token mode (§3), reinforcing which mode
+   is live. A blank spacer row separates the two (row 2) so the
+   wordmark/credits line reads as its own band above the timeframe line.
+   Row 3 left: the timeframe selector — three labels with the active one
+   highlighted (reverse video), the others muted; **`t` cycles** today →
+   week → month → today.
 2. **Bars list (fills remaining height):** one block per model used in
-   the window, **sorted by window cost desc** (ties: name asc — stable
-   order, no jitter). Each block = label row + bar row (+ one blank
+   the window, **sorted by the active mode's metric desc** (window cost
+   in cost mode, total tokens in token mode; ties: name asc — stable
+   order, no jitter, §3). Each block = label row + bar row (+ one blank
    spacer row when height allows; drop spacers first when tight).
    Scrolls inside a viewport when models exceed available height, with
-   `▼ 3 more` / `▲ 2 more` edge indicators.
+   `▼ 3 more` / `▲ 2 more` edge indicators. **Fixed vertical rhythm
+   (§4):** exactly one blank row separates the header from the first
+   list element and the last list element from the status row, in
+   *every* density mode — spacer, no-spacer, and scroll. The scroll
+   indicators live *inside* that frame (a blank row always sits between
+   `▲ N more` and the header, and between `▼ N more` and the status
+   row); the list never touches the chrome above or below it, and the
+   gap does not change as the window resizes.
 3. **Status row:** last-request wall time + relative age, meter lag
-   (§7), the current bar scale (`scale 2M`, muted — see §3), connection
-   state: `● live` (realtime healthy), `◌ polling` (poll mode, chosen
-   via `p`), `○ reconnecting…` (with retry countdown), `✗ offline`.
-   Symbols + words, never color alone.
-4. **Hint row:** the core bindings rendered by the `help` bubble from
-   the central keymap. `?` toggles the expanded help overlay.
+   (§7), the current bar scale in the active mode's unit (`scale 2M` in
+   token mode, `scale $5` in cost mode, muted — see §3; this doubles as
+   the **mode indicator**, and gains a `·manual` marker when the scale is
+   a hand-set zoom), connection state: `● live` (realtime healthy),
+   `◌ polling` (poll mode, chosen via `p`), `○ reconnecting…` (with retry
+   countdown), `✗ offline`. Symbols + words, never color alone.
+4. **Hint row:** the core bindings from the central keymap, collapsed by
+   **priority** as width shrinks (not ellipsized). `j/k select · ? help ·
+   q quit` are the protected core — they always fit, down to the smallest
+   screen. As width allows, lower-priority bindings are added back in
+   order: `enter details`, `t window`, `m mode`, `± zoom`, `r refresh`,
+   `p source`, `i last request`. This replaces the `help` bubble's blunt
+   `…` truncation, which could hide *everything* on a narrow terminal.
+   `?` toggles the expanded help overlay (every binding, always reachable
+   there regardless of width).
 
-**Keymap:** `t` cycle timeframe · `↑/↓` or `j/k` select · `enter`/`l`
-details · `esc`/`h` back · `r` refresh · `p` toggle live source
-(realtime ↔ poll) · `?` help · `q`/`ctrl+c` quit. Single-key timeframe
-cycling replaces the earlier `d`/`w`/`m` bindings — one key to remember,
-three states, and the header always shows where you are.
+**Keymap:** `t` cycle timeframe · `m` toggle mode (cost ↔ tokens, §3) ·
+`-`/`+` zoom scale out/in · `0` reset scale to auto (§3) · `j/k` (or
+`↑/↓`) select · `enter`/`l` details · `esc`/`h` back · `r` refresh ·
+`p` toggle live source (realtime ↔ poll) · `i` recent-request modal (§7)
+· `?` help · `q`/`ctrl+c` quit. Both `j/k` and the arrow keys move the
+selection, but the hint row and help advertise **`j/k`** — the arrows are
+an undocumented bonus, so the primary label is compact and vim-native.
+Single-key timeframe cycling (`t`) replaced the earlier `d`/`w`/`m`
+bindings; `m` is now the cost/token **mode** toggle. (`i` for the
+recent-request modal, and the exact zoom keys, are provisional — free,
+hint-row-friendly picks; change on review if better mnemonics surface.
+`+` and `=` are the same physical key, so both zoom in.)
 
 **Mouse (augmentation, never required):** wheel scrolls the list; click
 selects a bar; click on the already-selected bar (or double-click) opens
@@ -99,25 +140,74 @@ The details screen stays live — realtime events update it in place.
 Selection state: selected model name rendered bold + `▸` prefix.
 Selection follows the *model*, not the row index, across re-sorts.
 
+**Recent-request modal (`i`)** is a centered overlay (same chrome as the
+`?` help overlay — the app's one transient border, §2 region 4) that
+answers "what did the last thing that happened actually cost?" — the
+question a live meter raises but the bars can't fully answer at a glance.
+It shows the **most recent burst** (§7 — same-model live requests
+coalesced within `burstGap`, so an agent's rapid tool-call fan-out reads
+as one logical action, not a flicker of a dozen tiny ones):
+
+- Model (and routed provider slug when reported).
+- Requests coalesced (`3 requests` when >1; the time span they covered).
+- Input / output tokens, cached and reasoning tokens, all summed over the
+  burst; `—` for unreported (NULL) facts, never 0.
+- Total cost with the input/output split.
+- Wall time of the burst's latest request + relative age, and meter lag.
+
+It is **live** (a new arrival updates or replaces it in place) and
+**display-only** — it reads the same coalesced object that drives the §5
+highlight, and neither ever feeds the authoritative window totals. When
+no live request has been seen this session, the modal shows a friendly
+`no requests seen yet` line. `i` or `esc` closes it.
+
 ## 3. The Bars
 
-Two axes carry two different truths, deliberately decoupled:
+**Two display modes — cost and tokens — toggled by `m`.** *(Revised
+2026-07-08 — supersedes the earlier "two decoupled axes" design.)* The
+app never tries to show volume and money in the *same* bar (that made a
+cell mean neither — see the revision note below). Instead each of two
+modes is **single-denomination end to end** — length, interior split,
+sort order, and the §5 highlight all speak one language — so the intent
+of every cell is unambiguous, and `m` re-renders between them:
 
-- **Vertical position = money.** Bars are sorted by window **cost**
-  desc — the list order answers "where is my money going".
-- **Bar length = volume.** Length is proportional to the model's
-  **total tokens** (input + output) — the fill answers "what am I
-  actually using". An expensive model used sporadically sits high in
-  the list with a short bar; a budget workhorse sits lower with a long
-  bar. That divergence is signal, not noise.
+- **Cost mode** (the default — burnbar is a money meter): bar length ∝
+  the model's **total window cost**; the interior split is
+  **input-cost vs output-cost**; the highlight is the latest burst's
+  **input/output cost** (§5). Answers "how fast is my money going, and on
+  what".
+- **Token mode:** bar length ∝ the model's **total tokens** (input +
+  output); the split is **input-token vs output-token volume**; the
+  highlight is the burst's **input/output tokens**. Answers "how much am I
+  actually using".
+
+**Sort follows the mode:** cost mode sorts by window cost desc, token
+mode by total tokens desc (ties: name asc). So in either mode the longest
+bar sits on top and vertical position agrees with length — each mode is
+internally coherent. Toggling `m` may re-sort; selection follows the
+*model* across it (§2). *(Judgment call, overridable: the alternative was
+a stable always-by-cost sort that never jumps vertically on toggle; per-
+mode coherence won.)*
+
+> **Why two modes, not the old hybrid.** The prior design set length ∝
+> tokens but split the interior by *cost* — so an individual cell was
+> neither a fixed number of tokens nor a fixed number of dollars, just a
+> product of the two, and there was no honest place to draw "this burst
+> added Δinput". Splitting into two clean modes keeps *both* truths (spend
+> shape **and** usage volume) available on a keypress, with each bar
+> coherent. The label row (below) still shows the numbers for the *other*
+> denomination, so no information is ever hidden.
 
 **Auto-ranging scale (no bar is ever pinned at 100%).** All bars share
-one scale `S` = the full-content-width token value, drawn from the
-1–2–5 ladder (`10K, 20K, 50K, 100K, 200K, 500K, 1M, 2M, 5M, …`; floor
-10K). `S` is the smallest ladder value such that `tokens_max ≤ 0.8·S`,
-recomputed as a pure function of the current window's data — no state,
-no hysteresis. Bar width = `W · tokens_i / S`, minimum 1 cell for any
-nonzero model.
+one scale `S`, drawn from a **1–2–5 ladder in the active mode's unit** —
+tokens (`10K, 20K, 50K, 100K, …`; floor 10K) or dollars (`$0.001,
+$0.002, $0.005, $0.01, …`; a small dollar floor, tuned by feel). `S` is
+the smallest ladder value such that `max_i(value_i) ≤ 0.8·S`, a pure
+function of the current window + mode — no state, no hysteresis. Bar
+width = `W · value_i / S`, **minimum 1 cell** for any nonzero model
+(this floor is what keeps a heavily-used **free/$0 model** visible in
+cost mode rather than vanishing). The geometry generalizes over `value`
+(cost or tokens), so one code path serves both modes.
 
 The UX this produces: early in a day the first requests visibly fill
 the top bar; when it crosses 80% the scale steps up and **all bars
@@ -125,29 +215,65 @@ shrink together** (a springs-animated "zoom out"), after which each
 request advances the bar by proportionally less — sustained usage reads
 as repeated zoom-outs, exactly the "thresholds that scale with usage"
 feel. Because every bar shares `S`, proportions *between* bars stay
-mathematically exact at all times. The current scale is always shown
-muted in the status row (`scale 2M`) so absolute lengths stay
-interpretable; window switches recompute `S` instantly.
+mathematically exact at all times.
 
-**Inside a bar — split by cost shares, not token counts.** The boundary
+**Manual zoom (`-` / `+` / `0`) — the honest fix for the stub problem.**
+A long-tailed distribution (one or two dominant models, a handful of
+tiny ones) squashes the tail into indistinguishable 1-cell stubs under
+the auto scale. Rather than a *nonlinear* scale — which would break
+exact proportionality **and** fight the animation (a fixed Δ would move
+the bar by a size-dependent amount) — the user steps the **same linear
+1–2–5 ladder** by hand:
+
+- `-` zooms **out** (next larger `S`, bars shrink); `+` (and `=`) zooms
+  **in** (next smaller `S`, bars grow); `0` **resets to auto**.
+- Zooming in lengthens the small bars so their real differences show
+  (and makes incoming requests arrive as larger, more visible chunks);
+  the trade-off — accepted — is that bars now exceeding `S` **clamp to
+  full width** (`BarWidth` already caps at `W`), so several large bars
+  pin at ~100% and lose their mutual differences. Zoom out for the
+  opposite trade. There is no single scale that distinguishes both ends
+  of a long tail; manual zoom lets the user choose which end to inspect.
+- A manual `S` is **transient view state**, not config: it **resets to
+  auto** on refresh (`r`), window switch (`t`), and mode toggle (`m`) —
+  each re-baselines the view, and the auto scale differs per window and
+  per denomination anyway. While a manual `S` holds, auto-ranging does
+  not re-engage even when new data would overflow it (the bars clamp).
+- The zoom retargets every bar at once, reusing the §6 collective
+  scale-step animation, so a manual zoom reads as the same satisfying
+  "everyone re-scales together" motion.
+
+The current scale is always shown muted in the status row in the active
+mode's unit (`scale 2M` tokens, `scale $5` cost) — which is also the
+primary **mode indicator** — with a marker when it is manual
+(`scale 500K·manual`) so a pinned zoom is never mistaken for auto.
+
+**Inside a bar — the split, in the active mode's unit.** The boundary
 between the input segment (full block `█`) and output segment (medium
-shade `▒`, same hue) sits at `input_cost / (input_cost + output_cost)`
-using the window's summed **actual split costs**. This shows at a
-glance what fraction of the model's spend went to input vs output —
-far more truthful than token-volume proportions, because output tokens
-cost several times more and cache discounts shrink effective input
-cost. The reported split costs already embody cache discounts (that's
-why the schema stores facts, not `unit_price × tokens` recomputation),
-so cached-token handling is automatic and exact. Fallbacks, in order:
-if split costs are unreported (NULL sums) or both zero (free models),
-fall back to the token-volume split; glyph difference keeps the split
-readable in monochrome either way.
+shade `▒`, same hue) sits at the input share of the bar's own
+denomination: `input_cost / (input_cost + output_cost)` in **cost mode**,
+`input_tokens / (input_tokens + output_tokens)` in **token mode**. The
+cost split shows at a glance what fraction of spend went to input vs
+output — truthful in a way token proportions can't be, because output
+tokens cost several times more and cache discounts shrink effective input
+cost; the summed **actual split costs** already embody those discounts
+(the schema stores facts, not `unit_price × tokens`), so cached-token
+handling is automatic and exact. Cost-mode fallback: if split costs are
+unreported (NULL sums) or both zero (free models), fall back to the
+token-volume split for the interior boundary (length stays honest — total
+cost is always known). The glyph difference keeps the split readable in
+monochrome in either mode.
 
 **Label row** (above each bar): model name left (the alias slug, e.g.
-`deepseek/deepseek-v4-flash`); tokens center-right, muted:
-`1.2M in · 340.2K out`; cost right-aligned, bold. The cost column is the
-row's anchor — right-aligned costs down the screen read as a column,
-mirroring the cost-ranked ordering.
+`deepseek/deepseek-v4-flash`); then both denominations, with the
+**active mode's metric** bold and right-aligned as the row's anchor and
+the other denomination muted beside it — so the bold right column always
+mirrors the sort order (§3 "sort follows the mode"), and the *other*
+denomination stays visible so no information is hidden. In **cost mode**:
+`1.2M in · 340.2K out` (muted, the input/output token breakdown) …
+`$0.4821` (bold cost anchor). In **token mode**: `$0.4821` (muted) …
+`1.5M` (bold total-tokens anchor). Right-aligned anchors down the screen
+read as a column, mirroring the active ordering.
 
 ## 4. Responsive Behavior
 
@@ -160,14 +286,32 @@ charge. Ladder, by columns:
 - **80–109:** spacers dropped when height demands, tokens compact
   (`1.2M→340K`).
 - **60–79:** model names middle-truncated keeping the model part
-  (`…/deepseek-v4-flash`), tokens dropped from the label row (cost
-  stays — the details screen has the tokens).
-- **40–59:** name + cost + bar only.
+  (`…/deepseek-v4-flash`); the **secondary** denomination dropped from
+  the label row, the active mode's bold metric anchor stays (cost in cost
+  mode, tokens in token mode — §3; the details screen has the rest).
+- **40–59:** name + active-metric anchor + bar only.
 - **Below 40×10:** centered `terminal too small (min 40×10)` message —
   never a crash or a mangled layout.
 
 Height pressure drops, in order: spacer rows → status row merges into
-hint row → list scrolls. Header and hint row never disappear.
+hint row → list scrolls. Header (now **3 rows** — wordmark, blank
+spacer, timeframe/spend, §2) and hint row never disappear.
+
+**Fixed list vertical rhythm.** The bars list keeps a constant one-row
+gap above its first element and below its last, in every density mode:
+
+- The old layout only reserved a top gap in *spacer* mode. In no-spacer
+  and scroll modes the first block (or the `▲ N more` indicator) butted
+  against the header and the bottom indicator butted against the status
+  row — so the whitespace visibly jittered as the window resized. That
+  is the bug this rule fixes.
+- Invariant: reserve one blank row at the top of the list region and one
+  at the bottom **before** placing content, in all of spacer /
+  no-spacer / scroll. The `▲`/`▼` scroll indicators render *inside* that
+  frame (so a blank always separates them from the chrome), and the
+  number of visible blocks is computed against the height that remains
+  after the two reserved rows. The result: consistent breathing room
+  regardless of size or mode, even when it costs one fewer visible bar.
 
 ## 5. Color, Accents & Theming
 
@@ -181,75 +325,116 @@ the emulator uses. We only rely on standard block/box glyphs —
 | Token | ANSI | Used for |
 |---|---|---|
 | `accent.primary` | cyan | wordmark, active timeframe, selection, input segment |
+| `accent.primary.bright` | bright cyan | latest-burst **input** highlight (trailing input cells) |
 | `bar.output` | blue | output segment (plus the `▒` glyph difference) |
-| `accent.session` | yellow | accent1 slices — usage since anchor |
-| `accent.latest` | magenta | accent2 slice — the most recent request |
+| `bar.output.bright` | bright blue | latest-burst **output** highlight (the bar tail) |
 | `text.primary` | default fg | names, values |
 | `text.muted` | bright black | token counts, timestamps, inactive labels, hints, scale |
 | `status.ok` / `status.warn` / `status.error` | green / yellow / red | connection dot, error banner |
+
+The highlight uses the **bright ANSI pair** of the two segment colors,
+not two extra hues — this is what let the old `accent.session` (yellow)
+and `accent.latest` (magenta) slots be **retired entirely** (freeing two
+ANSI-16 slots and simplifying the Stage E.1 theme picker's token list).
 
 Honor `NO_COLOR` and dumb terminals: monochrome must remain fully
 readable (segments by glyph, selection by `▸` + bold, status by symbol
 + word).
 
-**Accent semantics — a rolling anchor, and an independent accent2.**
+**The latest-burst highlight — one highlight, brighter-shade
+augmentation.** *(Revised 2026-07-08, superseding the earlier
+rolling-anchor + accent1/accent2 + focus-events design — see Stage D.2.)*
 
-- **accent2 is anchor-independent:** the single most recent live row
-  (§7) always renders as the accent2 slice, until superseded by a newer
-  one or cleared by refresh. Rationale: after any absence, the one
-  thing worth seeing is the impact of the last request (e.g. a
-  long-running request that resolved while you were away) — and it
-  should be visible regardless of any staleness window.
-- **accent1 = live rows newer than `anchor`**, where
-  `anchor = max(lastFocusGainOrAppStart, now − 5 min)` —
-  **unconditionally**. The 5-minute floor makes accent1 a rolling
-  "recent activity" window. No blur exception: keyboard focus is the
-  only thing terminals can report — there is no "visible in the
-  viewport" signal — and the meter's primary usage pattern is sitting
-  *visible but never focused* beside the working terminal, where a
-  blur-frozen anchor would accumulate highlights forever.
-- **Focus-gain resets the anchor to now** when the event is available —
-  clicking into the meter means "seen it" — **but on a ~1 s debounce, not
-  instantly**: the accents hold for `accentClearDelay` (~1 s, a named
-  constant tuned by feel) after focus-gain so a glance still catches what
-  changed, *then* clear. ANSI-16 has no alpha, so this is a timed
-  hold-then-clear (like the accent2 emphasis in §6), not a true fade.
+There is exactly **one** highlight: the **most recent burst** (§7 —
+same-model live requests coalesced within `burstGap`; a fan-out of tool
+calls is one logical action). It is drawn not as a separate colored
+slice appended to the bar, but as a **brighter shade of the segment it
+belongs to**, so the bar never carries more than its two semantic hues.
+It works identically in both display modes (§3), reading the burst's
+value in the **active mode's unit** — cost in cost mode, tokens in token
+mode:
 
-Slice widths follow the same token-proportional math as bar lengths,
-**with one floor: a live accent2 slice always renders at least 1 cell
-wide** regardless of its token proportion — the minimum-visible-event
-rule (§3's "min 1 cell" for bar width, applied here to the highlight).
-Its purpose is the tiny-request case: a request small enough to move the
-bar by a sub-cell fraction (a few hundred tokens against a `scale 2M`
-bar) would otherwise paint a zero-width highlight and land invisibly,
-which for a "a request landing is *seen*" meter (§1) is a failure. The
-1-cell floor plus the ~1 s bold emphasis (§6) together guarantee every
-captured request is visibly seen; the floor borrows its cell from the
-segment it sits in, so between-bar bar *lengths* stay mathematically
-exact.
-The 5-minute window is a named constant (`accentWindow`), tuned by feel
-in Stage D — 2–3 min is twitchy across agent think-pauses, 10 min keeps
-stale work looking new. Focus reporting is xterm mode 1004, surfaced as
-focus/blur messages in Bubble Tea (v1: `tea.WithReportFocus()`; confirm
-the v2 equivalent — likely declared on the view); tmux needs
-`set -g focus-events on` (document it). With no focus events at all,
-the rolling window alone governs — same behavior, no configuration.
+- The burst's **input** value brightens the **trailing edge of the input
+  segment** (`accent.primary.bright`) — the input side visibly grew.
+- The burst's **output** value brightens the **tail** of the bar
+  (`bar.output.bright`) — the output side visibly grew.
 
-Accents live only on live rows, so a manual refresh (which clears them,
-§7) also clears accents. Accepted: refresh means "re-baseline my view
-of the world".
+So a landing burst resizes *both* sides of the bar and paints the added
+cells in the bright variant of each side's own color: `[in][Δin·bright]
+[out][Δout·bright]` — in cost mode those Δ's are the burst's input/output
+**cost**, in token mode its input/output **tokens**. This is strictly
+more legible than the old scheme, where an entire request (input **and**
+output) was appended as a single foreign-colored slice, giving the bar
+3–4 competing hues that were hard to read at a glance.
+
+**Why the delete is a win.** This retires the whole `accent1` /
+rolling-`anchor` / focus-and-blur subsystem: no `accentWindow`, no
+`accentClearDelay`, no xterm-1004 focus reporting, no tmux
+`focus-events` documentation, no "usage since anchor" concept. Keyboard
+focus was always a poor proxy for "seen it" on a meter that lives
+*visible but unfocused* beside the working terminal; dropping it removes
+the app's fiddliest state with no real loss.
+
+**Highlight geometry.** The bright regions are **proportional in the
+active mode's unit** (the same shared-scale math as bar length, §3): the
+Δinput and Δoutput cell counts come from the burst's summed input/output
+cost (cost mode) or tokens (token mode). Each bright region is clamped
+inside its own segment. The **minimum-visible floor** is preserved: a
+live burst always paints **≥1 bright cell** (borrowed from the base of
+the segment to its left) so a burst too small to lengthen the bar by a
+whole cell is still *seen* (§1) — the tiny-request guarantee, applied to
+the two-region highlight.
+
+**Lifecycle (persist until superseded).** On arrival the highlight gets a
+brief ~1 s **bold** emphasis (§6) — the landing pulse, and the primary
+signal for a sub-cell tiny burst. It then settles to the plain bright
+shade and **persists** until a newer burst supersedes it (a newer burst
+for any model moves the highlight there — only one model is ever
+highlighted) or a manual refresh clears it. No timed fade, no focus
+clearing: at rest the bar simply keeps showing "here is what the last
+activity added," which is exactly what a glanceable meter wants. (The
+recent-request modal, §2/§7, is the on-demand detail behind that
+highlight.)
+
+The highlight lives only on live rows and only when the burst falls
+inside the active window; a manual refresh (which drops the live deltas,
+§7) therefore also clears it. Accepted: refresh means "re-baseline my
+view of the world."
 
 ## 6. Motion
 
 Harmonica springs, one per bar, animating **bar width** toward its
 target whenever data changes (new event, scale step, window switch,
-refresh). Segment and accent boundaries are computed as fractions of
+refresh). Segment and highlight boundaries are computed as fractions of
 the animated width each frame — no separate springs. A scale step (§3)
 retargets every spring at once — the collective zoom-out is the app's
 most satisfying moment; make sure springs are tuned so it reads as one
 motion, not a ripple. New model appearing: grows from 0. Model leaving
 the window: shrinks to 0, then the row is removed (rows don't animate
 vertically; reorders are discrete).
+
+**Sub-cell smoothing via fractional block glyphs.** *(Added 2026-07-08
+— Stage D.2.)* The spring animates a *fractional* cell position, but the
+naïve render rounds it to whole cells, so the smooth motion is quantized
+away — worst at the end of the travel, where a critically-damped spring
+decelerates and the last cell or two land as visibly separated steps.
+The fix is not more FPS (the choppiness is **spatial**, not temporal —
+even at 120 fps a full-block bar still jumps a whole cell at a time) but
+**8× finer horizontal resolution**: render the bar's **leading tip** as a
+fractional block glyph (`▏▎▍▌▋▊▉█`, eighths) in the tip's color, so the
+edge advances in eighth-cell steps. This is the standard smooth-progress
+technique (`pv`, `btop`).
+
+Constraints, so this is honest:
+- The tip is a **solid** partial block even when the tip sits in the
+  shaded output segment — there is no partial-width `▒`, so the moving
+  edge reads as a clean solid growing tip (a slight, deliberate glyph
+  mix; tune by feel).
+- The interior seams (input/output cost split, the highlight boundaries)
+  do **not** need sub-cell smoothing — only the overall length change
+  does, and that lives at the tip.
+- **ASCII / `NO_COLOR` fallback** has no fractional glyphs, so it stays
+  cell-quantized — an accepted, documented degradation, not a bug.
 
 **Performance rule — idle means idle:** the app renders at 0 fps until
 a message arrives. A tick loop (~30 fps) runs **only while any spring
@@ -258,11 +443,11 @@ timestamps and the credits age — the only steady-state wakeup. No
 animation on resize (snap, §4) or on the details screen (values just
 update).
 
-The accent2 arrival moment gets a brief emphasis: the new slice renders
-bold for the first ~1 s (one timed message, not a fade — ANSI-16 has no
-alpha). This ~1 s emphasis is also the *primary* arrival signal for tiny
-requests (§5's minimum-visible 1-cell accent2 floor): when a landing
-request is too small to lengthen the bar, the single accent2 cell
+The highlight arrival moment gets a brief emphasis: the new bright
+region renders **bold** for the first ~1 s (one timed message, not a
+fade — ANSI-16 has no alpha). This ~1 s emphasis is also the *primary*
+arrival signal for tiny bursts (§5's minimum-visible 1-cell floor): when
+a landing burst is too small to lengthen the bar, the single bright cell
 pulsing bold for a second is what makes it seen.
 
 ## 7. Data & State Logic
@@ -279,9 +464,12 @@ Three stores plus derived view state:
   the **today-slice fetch** (PostgREST query for all rows with
   `requested_at ≥ local midnight`, fetched alongside the baseline) and
   **live events** from the LiveSource. Live-sourced rows are flagged
-  and carry `receivedAt` — only they participate in accents (§5) and
-  meter lag.
-- **`anchor`** — the accent timestamp (§5).
+  and carry `receivedAt` — only they participate in the latest-burst
+  highlight (§5), the recent-request modal (§2), and meter lag.
+
+(The earlier **`anchor`** store is **removed** — the rolling-anchor /
+focus-events accent design it served was retired in the 2026-07-08
+revision, §5/Stage D.2.)
 
 **Aggregation is one pure function** — the heart of the app and the
 most-tested code in it:
@@ -296,6 +484,40 @@ rows, and every division is zero-guarded (render `—`). Per-model and
 per-(model, provider_slug) grains both come out of this function; raw
 rows carry every column the view sums, so live data enriches the
 details screen too.
+
+### The latest burst — display-only request coalescing
+
+*(Added 2026-07-08 — Stage D.2/D.3.)* Agents fan a single prompt out into
+many rapid OpenRouter calls (tool loops), each landing as its own
+`requests` row. A "single most recent request" highlight would then show
+only the *last* tiny call of a twelve-call burst — misleading for a live
+meter. So a pure helper coalesces them **for display only**:
+
+```
+latestBurst(rows) → Burst   // nil when no live row has been seen
+```
+
+- A **burst** is a run of **live** rows for the **same model** whose
+  arrivals are each within `burstGap` (a named constant, ~3 s, tune by
+  feel) of the previous one, walked back from the most recent live
+  arrival (`receivedAt` order, the same deterministic tie-break as the
+  old accent2 pick). It sums input/output/cached/reasoning tokens and
+  cost, and records the request count and the wall-time span.
+- It is the single input to **both** the §5 highlight (Δinput/Δoutput
+  bright cells) and the §2 recent-request modal (full detail).
+- **Backend grouping was researched and rejected:** OpenRouter is
+  stateless and its Broadcast/OTLP payload carries no
+  prompt/conversation id — `trace_id` is per *generation*, not per
+  conversation, and Privacy Mode (required, root §3) strips content.
+  There is no shared key to add a column for; a passive meter cannot
+  assume clients inject one. Time-coalescing is therefore the only
+  viable path.
+- **Safe because it is display-only.** `aggregate()` still sums every
+  row into the authoritative window totals, untouched. A mis-grouped
+  burst (genuinely concurrent distinct requests, unusual gaps) only
+  slightly misattributes the *highlight and modal*, never a real number
+  — which is what makes the necessarily-imperfect ~3 s heuristic
+  acceptable to ship.
 
 ### Windows — local today, UTC week/month
 
@@ -633,10 +855,12 @@ live entirely in `internal/data`, mapping into the existing core types.
 New core helper `SnapshotMeta`/`LatestLive` (`meta.go`) derives the
 status-row last-request + meter-lag purely. Money `numeric` decodes to
 float64 (root §6). Accent anchor is a simple app-start/refresh timestamp
-for now — the rolling 5-min floor + focus-gain reset is Stage D, as are
+for now — the rolling 5-min floor + focus-gain reset was Stage D **but is
+now removed entirely** (2026-07-08 revision, §5/Stage D.2 — the whole
+anchor concept is deleted in favor of the latest-burst highlight); the
 springs, the 15s relative-time ticker, and the local-/UTC-midnight
-rollover timers (window *math* already exists in core; only the timers
-are deferred). Verified offline: `go build`/`vet`/`test` green (new tests
+rollover timers remain Stage D (window *math* already exists in core;
+only the timers are deferred). Verified offline: `go build`/`vet`/`test` green (new tests
 for the DTO NULL-vs-0 decode, the §7 credits-debounce example incl. both
 guards, and `SnapshotMeta`), plus a VHS smoke run of the real binary
 against a dead-endpoint poll config confirming the loading→reconnecting
@@ -672,7 +896,16 @@ alt-screen; and `p` toggles realtime ↔ poll live.
 - [x] Verify live: a real INSERT, a network blip, and a sleep/wake;
   record the go/no-go in root §6
 
-### Stage D — Live UX
+### Stage D — Live UX ✅ (2026-07-07) — accent/motion design revised 2026-07-08
+
+> **Revision banner (2026-07-08):** Stage D shipped (springs, the accent
+> system, the status row) and a review pass against the running app then
+> reworked two of its design pillars. The **focus-anchor + accent1/accent2**
+> highlight design below is **superseded by Stage D.2** (single
+> latest-burst highlight, brighter-shade augmentation — §5), and the
+> motion work gains **fractional-tip smoothing** (§6). The checklist items
+> here are kept for history; D.1–D.3 are the live schedule. The status-row
+> / ticker / rollover work stands unchanged.
 
 **Goal:** Make it feel *alive on events and calm at rest* — the two
 things a glanceable, always-open meter lives or dies by. A request
@@ -700,6 +933,134 @@ slow 15 s timestamp refreshes.
   states; 15 s relative-time ticker; local-midnight + UTC-midnight
   rollover timers
 
+---
+
+**Stages D.1–D.4 (2026-07-08 review):** a post-Stage-D UI/UX pass, agreed
+with the user over two rounds after living with the running app. Run
+**in order** (D.1 → D.2 → D.3 → D.4): D.1 is safe, self-contained chrome
+polish with no dependencies; D.2 is the visual-core bar rework (dual
+cost/token modes + the latest-burst highlight + sub-cell smoothing) that
+establishes the burst concept and the mode/scale generalization; D.3 adds
+manual scale zoom on top of that scale generalization; D.4 is the modal
+that reads the burst concept. They slot *before* Stage E (details
+screen), which is unchanged.
+
+### Stage D.1 — Chrome & layout polish
+
+**Goal:** Fix the layout papercuts a review of the running app surfaced —
+inconsistent whitespace and an unhelpful `…` on narrow terminals — so the
+frame around the bars feels as deliberate as the bars themselves. Pure
+layout/keymap work, no `core` math, so it is the safe warm-up.
+
+**Done when:** the header has a spacer row between its two lines; the list
+keeps a fixed one-row gap top and bottom in every density mode (spacer /
+no-spacer / scroll) and as the window resizes; the hint row collapses by
+priority (never to a bare `…`), always keeping `j/k select · ? help ·
+q quit`; and the select hint reads `j/k` (arrows still work, unadvertised).
+
+- [ ] Header: blank spacer row between wordmark/credits (row 1) and
+  timeframe/spend (row 3) — header becomes 3 rows; `computeLayout`
+  `listTop`/`listHeight` adjusted (§2/§4)
+- [ ] Fixed list vertical rhythm: reserve one blank row top and bottom of
+  the list region in all of spacer / no-spacer / scroll; scroll
+  indicators render inside that frame; `visible` computed against the
+  remaining height (§4) — the "first block touches the header" /
+  "indicator touches the chrome" bug
+- [ ] Priority hint-row collapse replacing `help.ShortHelpView`'s `…`
+  truncation: protected core `j/k select · ? help · q quit`, then add
+  `enter`/`t`/`r`/`p`/`i` by priority while they fit (§2); same for the
+  details-screen hint variant
+- [ ] Select hint label `j/k` (drop the `↑/↓` glyph dependency); arrows
+  stay bound and undocumented (§2)
+
+### Stage D.2 — Bar rework: dual modes, single highlight, sub-cell smoothing
+
+**Goal:** Rebuild the bar into two coherent, single-denomination display
+modes (cost / tokens) toggled by `m`; replace the confusing multi-hue
+accent scheme with one legible latest-burst highlight drawn in brighter
+shades of the bar's own two colors (in the active mode's unit); delete the
+whole focus-anchor subsystem it replaces; and beat the choppy animation
+with fractional-block sub-cell resolution. This is the visual heart of the
+review and the highest-risk change (it touches the most-tested `core`
+math), so it stands alone. It also **generalizes the scale/geometry over a
+`value` (cost or tokens)**, which Stage D.3's manual zoom then builds on.
+
+**Done when:** `m` toggles cost↔token mode, re-rendering length, split,
+sort, header unit, and scale-chip unit coherently (§3); a landing burst
+resizes both the input and output sides of the bar and paints the added
+cells in `accent.primary.bright` / `bar.output.bright` in the active unit
+(with the ≥1-cell floor + ~1 s bold pulse for tiny bursts); the highlight
+persists until a newer burst supersedes it or a refresh clears it;
+`accent1` / `anchor` / focus + tmux `focus-events` are gone from the code;
+the bar's leading tip animates in eighth-cell steps via fractional glyphs
+(ASCII/`NO_COLOR` cell-quantized); and `go test ./internal/core` is green
+with the accent tests rewritten to the burst model and new per-mode
+geometry tests.
+
+- [ ] `core`: generalize `ScaleFor`/`BarWidth`/`Geometry`/`SplitFraction`
+  over a `value` (float64) + a per-mode 1–2–5 ladder (token floor 10K;
+  dollar floor tuned by feel); a `Mode` selector picks cost vs token
+  values, the split source, and the sort key (§3)
+- [ ] `core`: `latestBurst(rows)` coalescing (§7, `burstGap`), returning
+  summed input/output **tokens and cost** + count + span; delete
+  `Accent1Tokens`/`Anchor` and the accent1 math; retarget the accent unit
+  tests onto the burst
+- [ ] Bar geometry: two brighter-shade highlight regions (Δinput at the
+  input-segment trailing edge, Δoutput at the tail), proportional in the
+  active mode's unit, clamped within each segment, ≥1-cell minimum-visible
+  floor borrowed from the segment to the left (§5)
+- [ ] Delete focus/blur handling, `accentWindow`, `accentClearDelay`, the
+  v2 focus-report wiring, and the tmux `focus-events` doc note (§5)
+- [ ] UI: `m` toggle (cost default); mode-aware sort, header unit
+  (`spent $` / `used <tokens>`), and scale-chip unit (`scale $5` /
+  `scale 2M`) — §2/§3
+- [ ] `meter.go` `renderBarRow`: draw base + bright regions in the bright
+  ANSI pair; ~1 s bold arrival pulse on the bright region (§6)
+- [ ] Fractional-block leading tip (`▏▎▍▌▋▊▉█`) in the tip color for
+  sub-cell smoothness; ASCII/`NO_COLOR` fallback stays cell-quantized (§6)
+- [ ] Styles: add `accent.primary.bright` / `bar.output.bright`; remove
+  `accent.session` / `accent.latest`; `NO_COLOR`/monochrome parity intact
+
+### Stage D.3 — Manual scale zoom
+
+**Goal:** Solve the long-tail "stub" problem *honestly* — without a
+nonlinear scale (which would break exact proportionality and fight the
+animation, §3) — by letting the user step the same linear 1–2–5 ladder by
+hand to zoom in on the small bars or out on the big ones. Builds directly
+on D.2's generalized, mode-aware scale.
+
+**Done when:** `-`/`+` step the active mode's scale ladder out/in and `0`
+resets to auto; zooming retargets every bar through the §6 collective
+animation; bars past the manual `S` clamp to full width; the scale chip
+shows a `·manual` marker while pinned; and the manual scale resets to auto
+on refresh (`r`), window switch (`t`), and mode toggle (`m`).
+
+- [ ] Manual `S` as transient view state overriding the auto scale until
+  reset; auto does not re-engage while it holds (§3)
+- [ ] `-`/`+`(`=`)/`0` bindings + hint-row/`?`-help entries (§2, keys
+  provisional); `+`/`=` share the zoom-in action
+- [ ] Reset-to-auto on `r`/`t`/`m`; `·manual` marker on the status scale
+  chip (§2/§3)
+
+### Stage D.4 — Recent-request modal
+
+**Goal:** Give the live meter the one thing a bar can't show — the actual
+detail of the thing that just happened — via an on-demand overlay over the
+most recent burst, so a curious glance ("what did that cost?") is one
+keypress away without cluttering the calm main screen.
+
+**Done when:** `i` toggles a centered overlay (help-overlay chrome) showing
+the latest burst's model/provider, coalesced request count + span,
+input/output/cached/reasoning tokens, cost with split, wall time + age,
+and meter lag — `—` for NULL facts, a friendly empty line before any live
+request; it updates live and closes on `i`/`esc`.
+
+- [ ] `core`: expose the `latestBurst` detail object (reuses D.2's
+  coalescing) with the modal's fields
+- [ ] Modal overlay reusing the `renderHelpOverlay` pattern; `i` binding +
+  hint-row/`?`-help entries (key provisional — §2)
+- [ ] Live update in place; empty state before the first live request
+
 ### Stage E — Details screen
 
 **Goal:** Answer the follow-up question the main screen deliberately
@@ -723,15 +1084,23 @@ place.
 
 **Goal:** Fix the one place the ANSI-16-only choice (§5) bites. The app
 maps each semantic token to a *fixed* ANSI slot (`accent.primary→cyan`,
-`bar.output→blue`, `accent.session→yellow`, `accent.latest→magenta`),
+`bar.output→blue`, plus their bright-variant highlight pair
+`accent.primary.bright→bright cyan`, `bar.output.bright→bright blue`),
 and in some terminal themes two of those slots are near-identical — the
-input/output segments or the two accents collapse into each other and
-the app's core distinctions stop reading. Let the user re-slot which of
-*their theme's* 16 colors each token grabs, seeing the change live, and
-persist it. This buys back the lost distinctions **without spending the
-theme-native inheritance** that makes ANSI-16 the right default in the
-first place. Sequenced after the details screen (Stage E) — it depends on
-the finished accent system (Stage D) to preview accents meaningfully.
+input/output segments, or a base color and its bright variant, collapse
+into each other and the app's core distinctions stop reading. Let the
+user re-slot which of *their theme's* 16 colors each token grabs, seeing
+the change live, and persist it. This buys back the lost distinctions
+**without spending the theme-native inheritance** that makes ANSI-16 the
+right default in the first place. Sequenced after the details screen
+(Stage E) — it depends on the finished highlight system (Stage D.2) to
+preview the bar and its bright regions meaningfully.
+
+**Note (post-2026-07-08 revision):** the token list this picker edits is
+now **smaller** — the retired `accent.session` (yellow) and
+`accent.latest` (magenta) slots are gone, replaced by the two
+bright-variant highlight tokens above (§5). So the picker covers the
+input/output base pair and their bright pair, not four independent hues.
 
 **Scope guard — remap within ANSI-16 only, never to hex.** A token may
 be pointed at a different one of the 16 ANSI colors; it may **not** be
@@ -743,7 +1112,8 @@ far-later, opt-in escalation with ANSI-16 staying the default — not now).
 **Done when:** a `theme`/`c` binding opens a picker screen listing the
 semantic tokens (§5) with each one's current ANSI color; changing a
 token's color updates a **live sample of the real meter** (a rendered
-bar with real segments + both accents, not abstract swatches) in the
+bar with real input/output segments + both bright highlight regions, not
+abstract swatches) in the
 same frame; `s` saves to config and `esc` cancels (reverting the
 in-memory palette); and relaunching picks up the saved palette. Removing
 color entirely (`NO_COLOR`) still yields a fully readable app — the
@@ -773,7 +1143,9 @@ bars. This is the difference between "works on my machine" and
 backend (killed network, paused project, bad keys) with every row
 behaving exactly as specified, golden-render tests pass for the
 main-screen states (color profile pinned), the VHS smoke shots render,
-and the config / tmux focus-events / debug-logging docs are written.
+and the config / debug-logging docs are written. (The tmux
+`focus-events` note is dropped — the focus system it documented was
+removed in the 2026-07-08 revision, §5/Stage D.2.)
 
 - [ ] Walk the full §8 failure table against the live backend (kill
   network, pause project, bad keys)
@@ -782,8 +1154,8 @@ and the config / tmux focus-events / debug-logging docs are written.
   flake) for the main screen states
 - [ ] VHS screenshot smoke (the `vhs-cli-demos` skill) — doubles as
   README material later
-- [ ] README/docs: config reference, tmux focus-events note, debug
-  logging
+- [ ] README/docs: config reference, debug logging (no tmux
+  focus-events note — focus reporting removed, §5/Stage D.2)
 
 **Definition of done (= root-spec Phase 2):** run `burnbar`, fire an
 OpenRouter request, watch the bar animate within seconds — through at
@@ -806,3 +1178,53 @@ requests (§3/§5/§6), and focus-gain accent clearing on a ~1 s
 `[colors]` config; §5/§7/§10), sequenced after the details screen. All
 agreed with the user; both accent refinements are explicitly "tune by
 feel later" once the app has seen real use.
+
+**2026-07-08 review (post-Stage-D, against the running app):** a UI/UX
+pass agreed with the user over two rounds, scheduled as **Stages
+D.1–D.4** (§10). Round-one decisions:
+
+1. **Latest-burst highlight replaces the accent1/accent2 + focus system**
+   (§5). One highlight, drawn as brighter shades of the bar's own two
+   colors (Δinput at the input-segment edge, Δoutput at the tail); the
+   whole rolling-anchor + focus/blur subsystem is deleted. The 2026-07-05
+   "rolling anchor + independent accent2" decision and the 2026-07-07
+   `accentClearDelay` refinement above are **superseded** by this.
+2. **Requests coalesce into a display-only burst** (~`burstGap` ≈ 3 s,
+   same model) feeding both the highlight and the recent-request modal
+   (§7). Backend prompt-id grouping was researched and rejected (no
+   conversation id in OpenRouter's stateless Broadcast payload). Never
+   touches authoritative totals.
+3. **Fractional-block sub-cell smoothing** for the bar's leading tip (§6)
+   — the choppiness is spatial quantization, not FPS; eighth-cell glyphs
+   give 8× resolution, with ASCII/`NO_COLOR` staying cell-quantized.
+4. **Chrome polish** (§2/§4): header spacer row, fixed list vertical
+   rhythm across all density modes, priority-based hint collapse (protect
+   `j/k select · ? help · q quit`), `j/k` as the advertised select label.
+
+Plus a **recent-request modal** (`i`, provisional key) over the latest
+burst (§2). `burstGap` and the fractional-tip feel are "tune by feel."
+
+Round-two decisions (which reshaped the bar denomination question rather
+than answering it):
+
+5. **Dual display modes instead of one denomination** (§3, `m` toggle).
+   The earlier "length=tokens, split=cost" hybrid was incoherent (a cell
+   meant neither); rather than picking cost *or* tokens, the app ships
+   **two single-denomination modes** — cost (default) and tokens — each
+   coherent end to end (length, split, sort, highlight, header/scale
+   units), with the label row always showing the other denomination's
+   numbers. This supersedes §3's original "two decoupled axes" framing.
+6. **Manual scale zoom** (§3, `-`/`+`/`0`) as the honest fix for the
+   long-tail stub problem — stepping the same linear 1–2–5 ladder by hand
+   beats a nonlinear scale, which was rejected for breaking exact
+   proportionality *and* fighting the animation. Zoom is transient view
+   state (resets to auto on `r`/`t`/`m`); over-scale bars clamp to full
+   width.
+
+Judgment calls made under the user's "go ahead if reasonable" (all
+overridable on review): **sort follows the active mode** (vs a stable
+always-by-cost sort); keybinds `m` (mode), `-`/`+`/`0` (zoom), `i`
+(modal); **mode signaled by units** (header `spent $`/`used <tokens>`,
+scale chip `$`/tokens) rather than extra chrome; **free/$0 models get a
+1-cell floor** in cost mode. The provisional keys are the open items
+flagged for this spec's review.
