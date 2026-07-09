@@ -26,23 +26,15 @@ const creditsFetchTimeout = 12 * time.Second
 // machines (tui/SPEC.md §7).
 const creditsHeartbeat = 5 * time.Minute
 
-// Stage D live-UX timing constants (tui/SPEC.md §5/§6). All "tune by
+// Stage D live-UX timing constants (tui/SPEC.md §5/§6/§7). All "tune by
 // feel" — sensible defaults now, adjust once the app has seen real use.
 const (
-	// accentWindow is the rolling floor on the accent1 anchor: live usage
-	// older than this stops being highlighted even if you never focus the
-	// app (tui/SPEC.md §5). 2–3 min is twitchy across agent think-pauses;
-	// 10 min keeps stale work looking new.
-	accentWindow = 5 * time.Minute
-	// accentClearDelay is the hold after focus-gain before accent1 clears —
-	// long enough that a glance still catches what changed (tui/SPEC.md §5).
-	accentClearDelay = 1 * time.Second
-	// accentEmphasis is how long a freshly-arrived accent2 slice renders
-	// bold — the primary "a request landed" signal for tiny requests
+	// accentEmphasis is how long a freshly-arrived burst renders bold —
+	// the primary "a request landed" signal for tiny requests
 	// (tui/SPEC.md §6).
 	accentEmphasis = 1 * time.Second
 	// relativeTick is the slow steady-state wakeup that refreshes relative
-	// timestamps and advances the rolling accent window (tui/SPEC.md §6).
+	// timestamps (tui/SPEC.md §6).
 	relativeTick = 15 * time.Second
 	// animFPS is the bar-animation frame rate; the tick loop runs at this
 	// cadence ONLY while a spring is unsettled, then stops (tui/SPEC.md §6).
@@ -135,13 +127,6 @@ func delayMsg(d time.Duration, msg tea.Msg) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return msg })
 }
 
-// armFocusClear schedules the debounced accent1 clear after a focus-gain,
-// tagged with the current focus generation so a re-focus within the delay
-// supersedes it (tui/SPEC.md §5).
-func armFocusClear(gen int) tea.Cmd {
-	return tea.Tick(accentClearDelay, func(time.Time) tea.Msg { return focusClearMsg{gen: gen} })
-}
-
 // armRelativeTick schedules the next steady-state timestamp refresh
 // (tui/SPEC.md §6). Re-armed by its own handler to run for the app's life.
 func armRelativeTick() tea.Cmd {
@@ -168,7 +153,7 @@ func armUTCRollover(now time.Time) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return utcRolloverMsg{} })
 }
 
-// emphasisEndCmd schedules the redraw that drops a fresh accent2's bold
+// emphasisEndCmd schedules the redraw that drops a fresh burst's bold
 // emphasis once accentEmphasis elapses (tui/SPEC.md §6).
 func emphasisEndCmd() tea.Cmd {
 	return tea.Tick(accentEmphasis, func(time.Time) tea.Msg { return emphasisEndMsg{} })

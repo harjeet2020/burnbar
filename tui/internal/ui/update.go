@@ -38,23 +38,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleClick(msg)
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg)
-	case tea.FocusMsg:
-		// Focus-gain means "seen it": clear accent1, but on a debounce so a
-		// glance still catches what changed (tui/SPEC.md §5). accent2 is
-		// anchor-independent and untouched here.
-		m.focusGen++
-		m.pendingFocusAt = time.Now()
-		return m, armFocusClear(m.focusGen)
-	case tea.BlurMsg:
-		// No blur exception: a frozen anchor would hoard highlights while
-		// the meter sits visible-but-unfocused (tui/SPEC.md §5).
-		return m, nil
-	case focusClearMsg:
-		if msg.gen != m.focusGen {
-			return m, nil // a re-focus within the delay superseded this
-		}
-		m.anchor = m.pendingFocusAt
-		return m.rebuilt(time.Now()), nil
 
 	// --- Data layer (Stage C) -------------------------------------------
 	case liveStartedMsg:
@@ -92,9 +75,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.fetchCreditsCmd()
 	case relativeTickMsg:
-		// Re-derive so relative timestamps refresh and the rolling accent
-		// window advances (tui/SPEC.md §6), then re-arm — the sole
-		// steady-state wakeup.
+		// Re-derive so relative timestamps refresh (tui/SPEC.md §6), then
+		// re-arm — the sole steady-state wakeup.
 		return m.rebuilt(time.Now()), armRelativeTick()
 	case localRolloverMsg:
 		// Local midnight: drop the stale today-slice, refetch it, and
@@ -146,8 +128,8 @@ func (m Model) handleLive(ev data.LiveEvent) (tea.Model, tea.Cmd) {
 		m = m.rebuilt(now)
 		cmds := []tea.Cmd{waitLiveCmd(m.liveCh, m.liveGen)}
 		cmds = append(cmds, m.onCreditEvent(now)...)
-		// A genuinely-new arrival is the newest live row → the accent2
-		// slice; flash it bold for accentEmphasis (tui/SPEC.md §6). The
+		// A genuinely-new arrival is the newest live row → the latest
+		// burst; flash it bold for accentEmphasis (tui/SPEC.md §6). The
 		// one-shot end command guarantees a redraw drops the bold even if
 		// the bar animation has already settled (no tick loop otherwise).
 		if isNew {
@@ -278,6 +260,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.refresh()
 	case key.Matches(msg, k.ToggleSource):
 		return m.toggleSource()
+	case m.scr == screenMeter && key.Matches(msg, k.Mode):
+		// Mode toggle re-cuts what drives length/sort/scale → animate the
+		// new bar lengths, same as a window switch (tui/SPEC.md §3).
+		m.mode = m.mode.Toggle()
+		return m.rebuilt(time.Now()).withAnim(nil)
 	case m.scr == screenMeter && key.Matches(msg, k.Up):
 		m = m.moveSelection(-1)
 	case m.scr == screenMeter && key.Matches(msg, k.Down):
@@ -300,14 +287,13 @@ func (m Model) setTimeframe(tf core.Timeframe) Model {
 	return m.rebuilt(time.Now())
 }
 
-// refresh re-baselines the world (tui/SPEC.md §5/§7): drop all rows and
-// reset the accent anchor (clearing highlights), then refetch the
-// baseline, today-slice, and credits. Stale data stays on screen until
-// the fresh data lands.
+// refresh re-baselines the world (tui/SPEC.md §5/§7): drop all rows
+// (clearing the highlight, since LatestBurst has nothing left to find),
+// then refetch the baseline, today-slice, and credits. Stale data stays
+// on screen until the fresh data lands.
 func (m Model) refresh() (tea.Model, tea.Cmd) {
 	m.rows.Clear()
-	m.anchor = time.Now()
-	m.accentEmphasisUntil = time.Time{} // refresh clears accents (tui/SPEC.md §5)
+	m.accentEmphasisUntil = time.Time{}
 	m = m.rebuilt(time.Now())
 
 	cmds := []tea.Cmd{m.fetchBaselineCmd(), m.fetchTodaySliceCmd()}
@@ -405,8 +391,9 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Timeframe labels live on header row 2 (y=1) on every screen.
-	if msg.Y == 1 {
+	// Timeframe labels live on header row 2 (y=2, after the D.1 spacer row)
+	// on every screen.
+	if msg.Y == 2 {
 		_, ranges := m.timeframeSelector()
 		for _, r := range ranges {
 			if msg.X >= r.x0 && msg.X < r.x1 {

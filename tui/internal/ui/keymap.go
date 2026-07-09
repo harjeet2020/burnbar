@@ -1,12 +1,11 @@
 // The central keymap (tui/SPEC.md §2): one source of truth that both
 // dispatches key events (key.Matches in update.go) and renders the hint
-// row + expanded help overlay via the help bubble — bindings and their
-// documentation can never drift apart.
+// row + expanded help overlay — bindings and their documentation can
+// never drift apart.
 
 package ui
 
 import (
-	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 )
 
@@ -19,6 +18,7 @@ type KeyMap struct {
 	Details      key.Binding
 	Back         key.Binding
 	Timeframe    key.Binding
+	Mode         key.Binding
 	Refresh      key.Binding
 	ToggleSource key.Binding
 	Help         key.Binding
@@ -26,13 +26,14 @@ type KeyMap struct {
 	Suspend      key.Binding
 
 	// selectHint is display-only: it folds Up+Down into the single
-	// "↑/↓ select" entry the hint row shows (the real bindings stay
+	// "j/k select" entry the hint row shows (the real bindings stay
 	// separate for dispatch).
 	selectHint key.Binding
 }
 
-// newKeyMap builds the bindings; glyphs supply the ↑/↓ vs j/k hint label.
-func newKeyMap(g Glyphs) KeyMap {
+// newKeyMap builds the bindings. The select hint label is always "j/k"
+// (tui/SPEC.md §2 Stage D.1) — arrows stay bound but undocumented.
+func newKeyMap() KeyMap {
 	return KeyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
@@ -53,6 +54,10 @@ func newKeyMap(g Glyphs) KeyMap {
 		Timeframe: key.NewBinding(
 			key.WithKeys("t"),
 			key.WithHelp("t", "window"),
+		),
+		Mode: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "mode"),
 		),
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),
@@ -75,21 +80,23 @@ func newKeyMap(g Glyphs) KeyMap {
 		),
 		selectHint: key.NewBinding(
 			key.WithKeys("up", "down", "k", "j"),
-			key.WithHelp(g.UpDown, "select"),
+			key.WithHelp("j/k", "select"),
 		),
 	}
 }
 
-// MeterHelp is the hint row on the main screen (tui/SPEC.md §2 mock:
-// "↑/↓ select · enter details · t window · r refresh · ? help · q quit").
-func (k KeyMap) MeterHelp() []key.Binding {
-	return []key.Binding{k.selectHint, k.Details, k.Timeframe, k.Refresh, k.ToggleSource, k.Help, k.Quit}
+// MeterHints splits the main screen's hint row into a protected core
+// (always rendered) and extra bindings added back in priority order as
+// width allows (tui/SPEC.md §2 Stage D.1).
+func (k KeyMap) MeterHints() (core, extra []key.Binding) {
+	return []key.Binding{k.selectHint, k.Help, k.Quit},
+		[]key.Binding{k.Details, k.Timeframe, k.Mode, k.Refresh, k.ToggleSource}
 }
 
-// DetailsHelp is the context hint row on the details screen
-// (tui/SPEC.md §2: "esc back · t window · r refresh · q quit").
-func (k KeyMap) DetailsHelp() []key.Binding {
-	return []key.Binding{k.Back, k.Timeframe, k.Refresh, k.ToggleSource, k.Quit}
+// DetailsHints is the details-screen equivalent of MeterHints.
+func (k KeyMap) DetailsHints() (core, extra []key.Binding) {
+	return []key.Binding{k.Back, k.Quit},
+		[]key.Binding{k.Timeframe, k.Refresh, k.ToggleSource}
 }
 
 // FullHelp feeds the `?` overlay: every binding, grouped navigate /
@@ -97,26 +104,7 @@ func (k KeyMap) DetailsHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.selectHint, k.Details, k.Back},
-		{k.Timeframe, k.Refresh, k.ToggleSource},
+		{k.Timeframe, k.Mode, k.Refresh, k.ToggleSource},
 		{k.Help, k.Quit},
 	}
-}
-
-// newHelpModel configures the help bubble to render entirely in muted
-// tones — the hint row is chrome, not content (tui/SPEC.md §5 token table
-// puts hints under text.muted).
-func newHelpModel(th Theme, g Glyphs) help.Model {
-	h := help.New()
-	h.ShortSeparator = g.Sep
-	h.FullSeparator = "   "
-	h.Styles = help.Styles{
-		Ellipsis:       th.Muted,
-		ShortKey:       th.Muted,
-		ShortDesc:      th.Muted,
-		ShortSeparator: th.Muted,
-		FullKey:        th.Text,
-		FullDesc:       th.Muted,
-		FullSeparator:  th.Muted,
-	}
-	return h
 }

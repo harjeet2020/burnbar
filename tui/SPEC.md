@@ -72,7 +72,7 @@ follows the *model* across re-sorts.
 
 ---
 
-**Pending — chrome polish (Stage D.1).** Header gains a blank spacer
+**Implemented, pending manual verification (Stage D.1).** Header gains a blank spacer
 row between the wordmark/credits line and the timeframe/spend line (3
 rows total) so the two bands read as visually separate. The bars list
 needs a **fixed one-row gap** above its first element and below its
@@ -90,8 +90,8 @@ source`, `i last request` are added back in that order as width allows
 opens the full, un-collapsed overlay regardless of width. Select hint
 label should read `j/k` (arrows stay bound, undocumented).
 
-**Pending — mode indicator (Stage D.2) and manual zoom (D.3).** Once
-dual cost/token modes ship (§3), the header's active-window total and
+**Implemented, pending manual verification (Stage D.2 mode indicator) — manual zoom (D.3) still pending.** Now that
+dual cost/token modes have shipped (§3), the header's active-window total and
 the status-row scale chip both need to read the *active mode's* unit —
 `spent $1.2345` / `used 1.5M` in the header, `scale $5` / `scale 2M` in
 the status row (the scale chip doubles as the mode indicator, no extra
@@ -114,14 +114,15 @@ drives the §5 highlight and never feeds the authoritative window
 totals. Friendly `no requests seen yet` line before any live request
 this session. `i` or `esc` closes it.
 
-## 3. The Bars — pending (Stage D.2/D.3)
+## 3. The Bars — Stage D.2 implemented, pending manual verification; Stage D.3 (manual zoom) still pending
 
-The current build (`internal/ui/meter.go`, `core.SplitBar`) renders a
+The old build (`internal/ui/meter.go`, `core.SplitBar`) rendered a
 single hybrid bar: length ∝ tokens, interior split by cost, one
-rolling accent1/accent2 highlight. That hybrid is the design being
-replaced — a cell in it means neither a fixed token count nor a fixed
-dollar amount, just a product of the two, with no honest place to draw
-"this burst added Δinput." Everything below is the target design.
+rolling accent1/accent2 highlight — a cell in it meant neither a fixed
+token count nor a fixed dollar amount, just a product of the two, with
+no honest place to draw "this burst added Δinput." Everything below is
+now implemented (pending manual verification); manual zoom (D.3) is
+the one piece not yet coded.
 
 **Two display modes — cost and tokens — toggled by `m`.** The app
 never shows volume and money in the *same* bar. Instead each mode is
@@ -218,9 +219,9 @@ small (min 40×10)` message, never a crash. Height pressure drops, in
 order: spacer rows → status row merges into hint row → list scrolls.
 Header and hint row never disappear.
 
-**Pending:** the fixed one-row list gap (top and bottom, across every
-density mode) described under Stage D.1 in §2 — today the gap only
-holds in spacer mode, so whitespace jitters as the window resizes.
+**Implemented, pending manual verification:** the fixed one-row list gap
+(top and bottom, across every density mode) described under Stage D.1
+in §2.
 
 ## 5. Color, Accents & Theming
 
@@ -245,13 +246,14 @@ The table already reflects the *target* highlight design (below) —
 the currently-live `AccentSession`/`AccentLatest` tokens in
 `styles.go` are the old rolling-anchor scheme and go away with them.
 
-**Pending — the latest-burst highlight (Stage D.2).** Replaces the
-live rolling-anchor + accent1/accent2 + keyboard-focus system
-entirely: no `accentWindow`, no `accentClearDelay`, no xterm-1004
-focus reporting, no tmux `focus-events` handling. Keyboard focus was
-always a poor proxy for "seen it" on a meter that lives visible-but-
-unfocused beside the working terminal, and the two-accent system gave
-a bar 3–4 competing hues for one request. The replacement: exactly
+**Implemented, pending manual verification — the latest-burst highlight
+(Stage D.2).** Replaces the old rolling-anchor + accent1/accent2 +
+keyboard-focus system entirely: no `accentWindow`, no
+`accentClearDelay`, no xterm-1004 focus reporting, no tmux
+`focus-events` handling. Keyboard focus was always a poor proxy for
+"seen it" on a meter that lives visible-but-unfocused beside the
+working terminal, and the two-accent system gave a bar 3–4 competing
+hues for one request. The replacement: exactly
 **one** highlight, the most recent burst (§7), drawn as a **brighter
 shade of the segment it belongs to** rather than a separate colored
 slice — the burst's input value brightens the trailing edge of the
@@ -296,8 +298,9 @@ tick loop runs only while any spring is unsettled, plus a slow 15 s
 ticker for relative timestamps/credits age. No animation on resize
 (snap, §4) or on the details screen (values just update).
 
-**Pending — sub-cell smoothing via fractional block glyphs (Stage
-D.2).** The spring animates a fractional cell position but naive
+**Implemented, pending manual verification — sub-cell smoothing via
+fractional block glyphs (Stage D.2).** The spring animates a
+fractional cell position but naive
 rendering rounds to whole cells, so smooth motion gets quantized away
 — worst at the end of travel where a critically-damped spring
 decelerates. Fix is not more fps (the choppiness is spatial, not
@@ -384,7 +387,8 @@ theme picker rather than hand-edited normally.
 
 ---
 
-**Pending — the latest burst (Stage D.2/D.3/D.4).** Agents fan a
+**Implemented, pending manual verification — the latest burst (Stage
+D.2; D.3/D.4 still build on top of it).** Agents fan a
 single prompt into many rapid OpenRouter calls (tool loops), each
 landing as its own `requests` row — a "single most recent request"
 highlight would then show only the *last* tiny call of a twelve-call
@@ -523,54 +527,57 @@ builds manual zoom on D.2's generalized scale; D.4 is the modal that
 reads the burst concept. They slot before Stage E (details screen is
 unchanged by them).
 
-### Stage D.1 — Chrome & layout polish
+### Stage D.1 — Chrome & layout polish ✅ (2026-07-09, pending manual verification)
 
-**Goal / Done when:** see §2 and §4's "Pending" notes — header spacer
-row, fixed list vertical rhythm, priority-based hint collapse, `j/k`
-select label.
+**Goal / Done when:** see §2 and §4 — header spacer row, fixed list
+vertical rhythm, priority-based hint collapse, `j/k` select label.
+Implemented in `internal/ui/layout.go`, `keymap.go`. Not yet manually
+verified against the running app.
 
-- [ ] Header: blank spacer row between wordmark/credits and
+- [x] Header: blank spacer row between wordmark/credits and
   timeframe/spend (3 rows total); `computeLayout` `listTop`/
   `listHeight` adjusted
-- [ ] Fixed list vertical rhythm: reserve one blank row top and bottom
+- [x] Fixed list vertical rhythm: reserve one blank row top and bottom
   of the list region in all of spacer/no-spacer/scroll; scroll
   indicators render inside that frame
-- [ ] Priority hint-row collapse replacing `help.ShortHelpView`'s `…`
+- [x] Priority hint-row collapse replacing `help.ShortHelpView`'s `…`
   truncation: protected core `j/k select · ? help · q quit`, then add
   `enter`/`t`/`r`/`p`/`i` by priority while they fit; same for the
   details-screen hint variant
-- [ ] Select hint label `j/k` (drop the `↑/↓` glyph dependency); arrows
+- [x] Select hint label `j/k` (drop the `↑/↓` glyph dependency); arrows
   stay bound and undocumented
 
-### Stage D.2 — Bar rework: dual modes, single highlight, sub-cell smoothing
+### Stage D.2 — Bar rework: dual modes, single highlight, sub-cell smoothing ✅ (2026-07-09, pending manual verification)
 
-**Goal / Done when:** see §3 (dual modes) and §5/§6's "Pending" notes
-(single latest-burst highlight, fractional-tip smoothing). This is the
+**Goal / Done when:** see §3 (dual modes) and §5/§6 (single
+latest-burst highlight, fractional-tip smoothing). This was the
 highest-risk stage — it touches the most-tested `core` math — and
 generalizes scale/geometry over a `value` (cost or tokens) that D.3
-then builds on.
+will build on. Implemented in `internal/core/bars.go`, `burst.go`,
+`types.go`, `internal/ui/meter.go`, `anim.go`, `styles.go`. Not yet
+manually verified against the running app.
 
-- [ ] `core`: generalize `ScaleFor`/`BarWidth`/`Geometry`/
+- [x] `core`: generalize `ScaleFor`/`BarWidth`/`Geometry`/
   `SplitFraction` over a `value` + per-mode 1–2–5 ladder; a `Mode`
   selector picks cost vs token values, split source, sort key
-- [ ] `core`: `latestBurst(rows)` coalescing (§7, `burstGap`), summed
+- [x] `core`: `latestBurst(rows)` coalescing (§7, `burstGap`), summed
   input/output tokens and cost + count + span; delete
   `Accent1Tokens`/`Anchor` and the accent1 math; retarget the accent
   unit tests onto the burst
-- [ ] Bar geometry: two brighter-shade highlight regions (Δinput at the
+- [x] Bar geometry: two brighter-shade highlight regions (Δinput at the
   input-segment trailing edge, Δoutput at the tail), proportional in
   the active mode's unit, clamped per segment, ≥1-cell floor
-- [ ] Delete focus/blur handling, `accentWindow`, `accentClearDelay`,
+- [x] Delete focus/blur handling, `accentWindow`, `accentClearDelay`,
   the v2 focus-report wiring, and the tmux `focus-events` doc note
-- [ ] UI: `m` toggle (cost default); mode-aware sort, header unit,
+- [x] UI: `m` toggle (cost default); mode-aware sort, header unit,
   scale-chip unit
-- [ ] `meter.go` `renderBarRow`: base + bright regions in the bright
+- [x] `meter.go` `renderBarRow`: base + bright regions in the bright
   ANSI pair; ~1 s bold arrival pulse
-- [ ] Fractional-block leading tip (`▏▎▍▌▋▊▉█`) in the tip color;
+- [x] Fractional-block leading tip (`▏▎▍▌▋▊▉█`) in the tip color;
   ASCII/`NO_COLOR` fallback stays cell-quantized
-- [ ] Styles: add `accent.primary.bright`/`bar.output.bright`; remove
+- [x] Styles: add `accent.primary.bright`/`bar.output.bright`; remove
   `accent.session`/`accent.latest`; `NO_COLOR`/monochrome parity intact
-- [ ] `go test ./internal/core` green with accent tests rewritten to
+- [x] `go test ./internal/core` green with accent tests rewritten to
   the burst model and new per-mode geometry tests
 
 ### Stage D.3 — Manual scale zoom

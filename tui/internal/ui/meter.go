@@ -6,10 +6,12 @@
 package ui
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
 
 	"github.com/harjeet2020/burnbar/tui/internal/core"
@@ -27,8 +29,9 @@ func leftRight(width int, left, right string) string {
 	return truncate(row, width, "")
 }
 
-// renderHeader draws the two header rows (wordmark + credits; timeframe
-// selector + window spend).
+// renderHeader draws the three header rows (wordmark + credits; a blank
+// spacer; timeframe selector + window spend) — the spacer separates the
+// two bands visually (tui/SPEC.md §2 Stage D.1).
 func (m Model) renderHeader() string {
 	th, g := m.theme, m.glyphs
 
@@ -46,10 +49,14 @@ func (m Model) renderHeader() string {
 	row1 := leftRight(m.width, th.AccentPrimary.Bold(true).Render(g.Wordmark), creditsRight)
 
 	selector, _ := m.timeframeSelector()
-	spendRight := th.Muted.Render("spent  ") + th.Value.Render(core.FormatCost(m.snap.Spend))
+	spendLabel, spendValue := "spent  ", core.FormatCost(m.snap.Spend)
+	if m.mode == core.ModeTokens {
+		spendLabel, spendValue = "used  ", core.FormatTokens(m.snap.TotalTokens)
+	}
+	spendRight := th.Muted.Render(spendLabel) + th.Value.Render(spendValue)
 	row2 := leftRight(m.width, selector, spendRight)
 
-	return row1 + "\n" + row2
+	return row1 + "\n\n" + row2
 }
 
 // timeframeSelector renders "[today]  week  month" (active label reverse
@@ -113,8 +120,8 @@ func (m Model) renderBars(l layout) []string {
 	scale := m.scale()
 	selIdx := m.selectedIndex()
 	for i := first; i < last && i < len(models); i++ {
-		if l.spacers {
-			rows = append(rows, "") // header gap, then block separators
+		if l.spacers && i > first {
+			rows = append(rows, "") // separator between blocks only
 		}
 		rows = append(rows, m.renderLabelRow(models[i], i == selIdx, l))
 		rows = append(rows, m.renderBarRow(models[i], scale, l))
@@ -134,26 +141,34 @@ func (m Model) renderBars(l layout) []string {
 	return rows[:l.listHeight]
 }
 
-// renderLabelRow draws a model's label line: name left; tokens (per
-// breakpoint) and bold cost right-aligned — the cost column is the row
-// anchor (tui/SPEC.md §3).
+// renderLabelRow draws a model's label line: name left; the other
+// denomination and the active mode's bold value right-aligned — the active
+// mode's value is the row anchor, mirroring the sort order (tui/SPEC.md §3).
 func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string {
 	th, g := m.theme, m.glyphs
 
-	cost := core.FormatCost(st.Cost)
-	tokens := ""
-	switch l.bp {
-	case bpWide:
-		tokens = core.FormatTokens(st.InputTokens) + " in" + g.Sep + core.FormatTokens(st.OutputTokens) + " out"
-	case bpStandard:
-		tokens = core.FormatTokens(st.InputTokens) + g.Arrow + core.FormatTokens(st.OutputTokens)
+	var anchor, secondary string
+	if m.mode == core.ModeTokens {
+		anchor = core.FormatTokens(st.TotalTokens())
+		switch l.bp {
+		case bpWide, bpStandard:
+			secondary = core.FormatCost(st.Cost)
+		}
+	} else {
+		anchor = core.FormatCost(st.Cost)
+		switch l.bp {
+		case bpWide:
+			secondary = core.FormatTokens(st.InputTokens) + " in" + g.Sep + core.FormatTokens(st.OutputTokens) + " out"
+		case bpStandard:
+			secondary = core.FormatTokens(st.InputTokens) + g.Arrow + core.FormatTokens(st.OutputTokens)
+		}
 	}
 
-	right := th.Value.Render(cost)
-	rightW := lipgloss.Width(cost)
-	if tokens != "" {
-		right = th.Muted.Render(tokens) + "  " + right
-		rightW += lipgloss.Width(tokens) + 2
+	right := th.Value.Render(anchor)
+	rightW := lipgloss.Width(anchor)
+	if secondary != "" {
+		right = th.Muted.Render(secondary) + "  " + right
+		rightW += lipgloss.Width(secondary) + 2
 	}
 
 	maxName := l.contentW - rightW - 2
@@ -173,32 +188,36 @@ func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string
 	return prefix + nameStyled + strings.Repeat(" ", pad) + right
 }
 
-// renderBarRow draws a model's bar: length ∝ total tokens on the shared
-// scale, interior split at the cost-share boundary, accent slices at the
-// right end (newest usage grows the bar rightward) — tui/SPEC.md §3/§5.
-func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
+// renderBarRow draws a model's bar: length ∝ the active mode's value on the
+// shared scale, interior split at that mode's boundary, the latest burst
+// painted as a brighter shade at the trailing edge of each segment it
+// belongs to — never a separate slice (tui/SPEC.md §3/§5/§6).
+func (m Model) renderBarRow(st core.ModelStat, scale float64, l layout) string {
 	th, g := m.theme, m.glyphs
 
 	// The bar's total width is spring-animated (tui/SPEC.md §6); its
 	// interior is recomputed as fractions of whatever width is on screen
 	// this frame. target is the steady-state width the spring pulls toward.
-	target := core.BarWidth(l.contentW, st.TotalTokens(), scale)
-	display := m.barDisplayCells(st.Name, target, l.contentW)
+	// whole/eighths split the animated position for the fractional tip.
+	target := core.BarWidth(l.contentW, st.Value(m.mode), scale)
+	whole, eighths := m.barDisplayEighths(st.Name, target, l.contentW)
 
-	total := st.TotalTokens()
-	var acc1Frac, acc2Frac float64
-	if total > 0 {
-		acc1Frac = float64(st.Accent1Tokens) / float64(total)
-		acc2Frac = float64(st.Accent2Tokens) / float64(total)
+	inputFrac := core.SplitFraction(st, m.mode)
+	var brightInputFrac, brightOutputFrac float64
+	if m.burst != nil && m.burst.Model == st.Name {
+		if denom := st.Value(m.mode); denom > 0 {
+			brightInputFrac = m.burst.InputValue(m.mode) / denom
+			brightOutputFrac = m.burst.OutputValue(m.mode) / denom
+		}
 	}
-	geo := core.SplitBar(display, core.SplitFraction(st), acc1Frac, acc2Frac, st.Accent2Tokens > 0)
-	if geo.Cells == 0 {
+	geo := core.SplitBar(whole, inputFrac, brightInputFrac, brightOutputFrac)
+	if geo.Cells == 0 && eighths == 0 {
 		return ""
 	}
 
-	// The glyph pattern (input vs output) spans the whole bar; accent
-	// regions recolor the tail without changing glyphs, so the split
-	// stays readable in monochrome.
+	// The glyph pattern (input vs output) spans the whole bar; the burst
+	// highlight recolors the trailing cells of its own segment without
+	// changing glyphs, so the split stays readable in monochrome.
 	glyphAt := func(i int) string {
 		if i < geo.InputCells {
 			return g.BarInput
@@ -216,23 +235,41 @@ func (m Model) renderBarRow(st core.ModelStat, scale int64, l layout) string {
 		return style.Render(b.String())
 	}
 
-	// A freshly-arrived accent2 slice renders bold for accentEmphasis — the
-	// arrival signal, and the only way a sub-cell tiny request is seen (§6).
-	acc2Style := th.AccentLatest
-	if st.Accent2Tokens > 0 && time.Now().Before(m.accentEmphasisUntil) {
-		acc2Style = acc2Style.Bold(true)
+	// A freshly-arrived burst renders bold for accentEmphasis — the arrival
+	// signal, and the only way a sub-cell tiny request is seen (§6).
+	pulsing := m.burst != nil && m.burst.Model == st.Name && time.Now().Before(m.accentEmphasisUntil)
+	brightIn, brightOut := th.AccentPrimaryBright, th.BarOutputBright
+	if pulsing {
+		brightIn, brightOut = brightIn.Bold(true), brightOut.Bold(true)
 	}
 
-	inputEnd := geo.InputCells
-	if inputEnd > geo.Base {
-		inputEnd = geo.Base
-	}
+	plainInputEnd := geo.InputCells - geo.BrightInput
+	plainOutputEnd := geo.Cells - geo.BrightOutput
+
 	var b strings.Builder
 	b.WriteString(" ")
-	b.WriteString(run(0, inputEnd, th.AccentPrimary))
-	b.WriteString(run(inputEnd, geo.Base, th.BarOutput))
-	b.WriteString(run(geo.Base, geo.Base+geo.Acc1, th.AccentSession))
-	b.WriteString(run(geo.Base+geo.Acc1, geo.Cells, acc2Style))
+	b.WriteString(run(0, plainInputEnd, th.AccentPrimary))
+	b.WriteString(run(plainInputEnd, geo.InputCells, brightIn))
+	b.WriteString(run(geo.InputCells, plainOutputEnd, th.BarOutput))
+	b.WriteString(run(plainOutputEnd, geo.Cells, brightOut))
+
+	if eighths > 0 {
+		// The boundary at whole+1 cells (not geo.InputCells, which is
+		// clamped to whole) decides which zone the tip is entering. Always
+		// the plain shade — the tip is a length-smoothing artifact of the
+		// spring, not a second highlight.
+		nextInputCells := int(math.Round(inputFrac * float64(whole+1)))
+		if nextInputCells < 0 {
+			nextInputCells = 0
+		} else if nextInputCells > whole+1 {
+			nextInputCells = whole + 1
+		}
+		tipStyle := th.BarOutput
+		if whole < nextInputCells {
+			tipStyle = th.AccentPrimary
+		}
+		b.WriteString(tipStyle.Render(g.FracTips[eighths-1]))
+	}
 	return b.String()
 }
 
@@ -243,7 +280,11 @@ func (m Model) renderStatus(width int) string {
 	th, g := m.theme, m.glyphs
 
 	conn := m.renderConn()
-	scale := "scale " + core.FormatTokens(m.scale())
+	scaleVal := m.scale()
+	scale := "scale " + core.FormatCost(scaleVal)
+	if m.mode == core.ModeTokens {
+		scale = "scale " + core.FormatTokens(int64(math.Round(scaleVal)))
+	}
 	source := "source " + m.sourceLabel()
 
 	lastFull, lastCompact := "last request —", "last —"
@@ -315,17 +356,44 @@ func (m Model) renderConn() string {
 // the connection state folded in when the status row was merged away
 // under height pressure (tui/SPEC.md §4).
 func (m Model) renderHints(l layout) string {
-	bindings := m.keys.MeterHelp()
+	core, extra := m.keys.MeterHints()
 	if m.scr == screenDetails {
-		bindings = m.keys.DetailsHelp()
+		core, extra = m.keys.DetailsHints()
 	}
 
-	h := m.help
 	prefix := " "
 	if l.mergedBottom {
 		conn := m.renderConn()
 		prefix = " " + conn + m.theme.Muted.Render(m.glyphs.Sep)
 	}
-	h.SetWidth(m.width - lipgloss.Width(prefix))
-	return prefix + h.ShortHelpView(bindings)
+	width := m.width - lipgloss.Width(prefix)
+	return prefix + renderPriorityHints(m.theme, m.glyphs.Sep, width, core, extra)
+}
+
+// renderPriorityHints renders the protected core bindings unconditionally,
+// then appends extra bindings in priority order while the row still fits
+// width — replacing the help bubble's blunt "…" truncation, which could
+// hide the entire hint row on a narrow terminal (tui/SPEC.md §2 Stage D.1).
+// Greedy: stops at the first entry that doesn't fit ("added back in that
+// order as width allows").
+func renderPriorityHints(th Theme, sep string, width int, core, extra []key.Binding) string {
+	hint := func(b key.Binding) string {
+		return th.Text.Render(b.Help().Key) + " " + th.Muted.Render(b.Help().Desc)
+	}
+	sepStyled := th.Muted.Render(sep)
+
+	parts := make([]string, 0, len(core)+len(extra))
+	for _, b := range core {
+		parts = append(parts, hint(b))
+	}
+	row := strings.Join(parts, sepStyled)
+
+	for _, b := range extra {
+		candidate := strings.Join(append(append([]string{}, parts...), hint(b)), sepStyled)
+		if lipgloss.Width(candidate) > width {
+			break
+		}
+		parts, row = append(parts, hint(b)), candidate
+	}
+	return row
 }

@@ -51,13 +51,13 @@ func animTickCmd() tea.Cmd {
 
 // barTargets returns each visible model's target bar width in cells, keyed
 // by model name — the equilibrium the springs pull toward. Pure over the
-// current snapshot, layout width, and shared scale.
+// current snapshot, layout width, active mode, and shared scale.
 func (m Model) barTargets() map[string]float64 {
 	l := m.currentLayout()
 	scale := m.scale()
 	targets := make(map[string]float64, len(m.snap.Models))
 	for _, st := range m.snap.Models {
-		targets[st.Name] = float64(core.BarWidth(l.contentW, st.TotalTokens(), scale))
+		targets[st.Name] = float64(core.BarWidth(l.contentW, st.Value(m.mode), scale))
 	}
 	return targets
 }
@@ -142,25 +142,35 @@ func (m Model) snapBars() Model {
 	return m
 }
 
-// barDisplayCells is the integer width to draw for a model this frame: the
-// animated width (rounded, clamped to the content width) when a spring
-// exists, else the steady-state target. contentW is the hard ceiling — a
-// shrinking bar sits transiently above its target, so target must NOT be
-// the clamp bound.
-func (m Model) barDisplayCells(name string, target, contentW int) int {
+// barDisplayEighths is the width to draw for a model this frame, split into
+// the whole-cell count to render solid and an eighths remainder [0,7] for
+// the fractional leading-tip glyph (tui/SPEC.md §6): the spring animates a
+// fractional cell position, but naive rounding quantizes the motion away —
+// 8x finer horizontal resolution keeps it visible. Uses the animated
+// position (clamped to the content width) when a spring exists, else the
+// steady-state target — in which case pos is always a whole number, so
+// eighths is always 0 (the tip only appears mid-animation). contentW is the
+// hard ceiling — a shrinking bar sits transiently above its target, so
+// target must NOT be the clamp bound.
+func (m Model) barDisplayEighths(name string, target, contentW int) (whole, eighths int) {
 	a := m.anim[name]
-	if a == nil {
-		return target
+	pos := float64(target)
+	if a != nil {
+		pos = a.pos
 	}
-	n := int(math.Round(a.pos))
-	switch {
-	case n < 0:
-		return 0
+	if pos < 0 {
+		pos = 0
+	}
 	// The critically-damped spring never overshoots, but guard so a retuned,
 	// under-damped spring can't paint past the bar's cell budget.
-	case contentW > 0 && n > contentW:
-		return contentW
-	default:
-		return n
+	if contentW > 0 && pos > float64(contentW) {
+		pos = float64(contentW)
 	}
+	whole = int(math.Floor(pos))
+	eighths = int(math.Round((pos - float64(whole)) * 8))
+	if eighths >= 8 { // rounding carried into the next whole cell
+		whole++
+		eighths = 0
+	}
+	return whole, eighths
 }

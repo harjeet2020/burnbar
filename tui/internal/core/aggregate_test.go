@@ -238,90 +238,21 @@ func TestAggregateSortOrder(t *testing.T) {
 	}
 }
 
-func TestAggregateAccents(t *testing.T) {
-	loc := time.UTC
-	midnight := time.Date(2026, 7, 5, 0, 0, 0, 0, loc)
-	now := midnight.Add(10 * time.Hour)
-	anchor := midnight.Add(9*time.Hour + time.Second) // 09:00:01
-
-	// rowA: live, arrived 09:00:02 — inside the anchor window.
-	rowA := req("ta", "s1", "m/a", 100, 0, 0.1, midnight.Add(9*time.Hour), true)
-	// rowB: long-running request — OLD span start (08:00) but the
-	// NEWEST arrival (09:30). This pins accent2 to arrival order.
-	rowB := req("tb", "s1", "m/b", 50, 0, 0.05, midnight.Add(8*time.Hour), true)
-	rowB.ReceivedAt = midnight.Add(9*time.Hour + 30*time.Minute)
-	// rowC: fetched, newest span start of all — must never accent.
-	rowC := req("tc", "s1", "m/c", 30, 0, 0.03, midnight.Add(9*time.Hour+45*time.Minute), false)
-	// rowD: live, arrived exactly AT the anchor — excluded (strictly after).
-	rowD := req("td", "s1", "m/a", 20, 0, 0.02, midnight.Add(8*time.Hour+30*time.Minute), true)
-	rowD.ReceivedAt = anchor
-
-	in := AggregateInput{
-		Rows:   []RequestRow{rowA, rowB, rowC, rowD},
-		Window: TimeframeToday, Now: now, Loc: loc, Anchor: anchor,
+func TestAggregateSortOrderTokenMode(t *testing.T) {
+	now := time.Date(2026, 7, 5, 15, 0, 0, 0, time.UTC)
+	d := UTCDayStart(now)
+	baseline := []DailyRow{
+		{Day: d, Model: "m/cheap", RequestCount: 1, CostUSD: 0.9, InputTokens: 10},
+		{Day: d, Model: "m/big", RequestCount: 1, CostUSD: 0.1, InputTokens: 900},
+		{Day: d, Model: "b/tie", RequestCount: 1, CostUSD: 0.5, InputTokens: 500},
+		{Day: d, Model: "a/tie", RequestCount: 1, CostUSD: 0.5, InputTokens: 500},
 	}
-	out := Aggregate(in)
-
-	b := statFor(t, out, "m/b")
-	if b.Accent2Tokens != 50 {
-		t.Errorf("m/b Accent2Tokens = %d, want 50 (newest by ReceivedAt wins)", b.Accent2Tokens)
-	}
-	a := statFor(t, out, "m/a")
-	if a.Accent1Tokens != 100 {
-		t.Errorf("m/a Accent1Tokens = %d, want 100 (rowA after anchor; rowD exactly at anchor excluded)", a.Accent1Tokens)
-	}
-	if a.Accent2Tokens != 0 {
-		t.Errorf("m/a Accent2Tokens = %d, want 0", a.Accent2Tokens)
-	}
-	c := statFor(t, out, "m/c")
-	if c.Accent1Tokens != 0 || c.Accent2Tokens != 0 {
-		t.Errorf("fetched row must never accent; got acc1=%d acc2=%d", c.Accent1Tokens, c.Accent2Tokens)
-	}
-	// accent1 must exclude the accent2 row itself.
-	if b.Accent1Tokens != 0 {
-		t.Errorf("m/b Accent1Tokens = %d, want 0 (accent2 row excluded from accent1)", b.Accent1Tokens)
-	}
-
-	t.Run("zero anchor disables accent1, keeps accent2", func(t *testing.T) {
-		in := in
-		in.Anchor = time.Time{}
-		out := Aggregate(in)
-		if got := statFor(t, out, "m/a").Accent1Tokens; got != 0 {
-			t.Errorf("Accent1Tokens = %d with zero anchor, want 0", got)
+	out := Aggregate(AggregateInput{Baseline: baseline, Window: TimeframeWeek, Now: now, Loc: time.UTC, Mode: ModeTokens})
+	want := []string{"m/big", "a/tie", "b/tie", "m/cheap"}
+	for i, name := range want {
+		if out[i].Name != name {
+			t.Fatalf("order = %v, want %v (total tokens desc, ties name asc)", names(out), want)
 		}
-		if got := statFor(t, out, "m/b").Accent2Tokens; got != 50 {
-			t.Errorf("Accent2Tokens = %d with zero anchor, want 50 (accent2 is anchor-independent)", got)
-		}
-	})
-}
-
-func TestAggregateOutOfWindowLiveRowAccentsNothing(t *testing.T) {
-	loc := time.UTC
-	midnight := time.Date(2026, 7, 5, 0, 0, 0, 0, loc)
-	now := midnight.Add(10 * time.Hour)
-
-	// The globally most recent arrival is a PRE-midnight row: outside
-	// the today window, so it has no bar to slice — no accent2
-	// anywhere, and no fallback to the older in-window row.
-	old := req("to", "s1", "m/old", 200, 0, 0.2, midnight.Add(-time.Hour), true)
-	old.ReceivedAt = now.Add(-time.Minute)
-	cur := req("tc", "s1", "m/cur", 100, 0, 0.1, midnight.Add(9*time.Hour), true)
-	cur.ReceivedAt = midnight.Add(9*time.Hour + 2*time.Second)
-
-	out := Aggregate(AggregateInput{
-		Rows:   []RequestRow{old, cur},
-		Window: TimeframeToday, Now: now, Loc: loc,
-		Anchor: midnight.Add(8 * time.Hour),
-	})
-
-	if len(out) != 1 || out[0].Name != "m/cur" {
-		t.Fatalf("models = %v, want only m/cur (pre-midnight row out of window)", names(out))
-	}
-	if out[0].Accent2Tokens != 0 {
-		t.Errorf("Accent2Tokens = %d, want 0 (no fallback when the newest arrival is out of window)", out[0].Accent2Tokens)
-	}
-	if out[0].Accent1Tokens != 100 {
-		t.Errorf("Accent1Tokens = %d, want 100 (in-window live row after anchor still accents)", out[0].Accent1Tokens)
 	}
 }
 

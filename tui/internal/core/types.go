@@ -39,6 +39,25 @@ func (t Timeframe) Next() Timeframe { return (t + 1) % 3 }
 // Timeframes lists all windows in display order for the header selector.
 var Timeframes = []Timeframe{TimeframeToday, TimeframeWeek, TimeframeMonth}
 
+// Mode is the active bar display mode (tui/SPEC.md §3): each mode is
+// single-denomination end to end — length, interior split, sort order, and
+// the latest-burst highlight all speak one language. ModeCost is the zero
+// value (burnbar is a money meter first).
+type Mode int
+
+const (
+	ModeCost Mode = iota
+	ModeTokens
+)
+
+// Toggle flips between the two modes (the `m` key, tui/SPEC.md §2/§3).
+func (md Mode) Toggle() Mode {
+	if md == ModeCost {
+		return ModeTokens
+	}
+	return ModeCost
+}
+
 // ModelStat is one model's aggregate over the active window — the shape
 // the bars list and details screen render from. In Stage B this becomes
 // the output of aggregate(); Stage A fills it from fixtures.
@@ -62,11 +81,6 @@ type ModelStat struct {
 	// (tui/SPEC.md §3).
 	InputCost  *float64
 	OutputCost *float64
-	// Accent1Tokens are tokens from live rows newer than the accent
-	// anchor, excluding the single most recent request (tui/SPEC.md §5).
-	Accent1Tokens int64
-	// Accent2Tokens are tokens of the single most recent live request.
-	Accent2Tokens int64
 	// CachedTokens, ReasoningTokens, and DurationMSSum are nullable
 	// window sums for the details screen; nil when never reported in
 	// the window (SQL SUM semantics — see DailyRow).
@@ -105,8 +119,19 @@ type ProviderStat struct {
 	TimedRequests int64
 }
 
-// TotalTokens is the bar-length driver: input + output (tui/SPEC.md §3).
+// TotalTokens is the bar-length driver in token mode: input + output
+// (tui/SPEC.md §3).
 func (m ModelStat) TotalTokens() int64 { return m.InputTokens + m.OutputTokens }
+
+// Value returns the active mode's driving number — cost or total tokens —
+// the single place that decides what drives bar length, sort order, and
+// scale (tui/SPEC.md §3).
+func (m ModelStat) Value(mode Mode) float64 {
+	if mode == ModeTokens {
+		return float64(m.TotalTokens())
+	}
+	return m.Cost
+}
 
 // ConnState is the live-source connection state shown in the status row —
 // always rendered as symbol + word, never color alone (tui/SPEC.md §2).
@@ -129,8 +154,11 @@ type Snapshot struct {
 	// Models, sorted by window cost descending, ties by name ascending —
 	// the stable order that prevents list jitter (tui/SPEC.md §2).
 	Models []ModelStat
-	// Spend is the total cost of the window (header row 2).
+	// Spend is the total cost of the window (header row 2, cost mode).
 	Spend float64
+	// TotalTokens is the total token volume of the window (header row 2,
+	// token mode, tui/SPEC.md §3).
+	TotalTokens int64
 	// Credits is the remaining OpenRouter balance; nil when unknown (no
 	// key configured, or not yet fetched).
 	Credits *float64

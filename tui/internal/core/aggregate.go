@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// AggregateInput carries the spec's four aggregate() arguments
-// (baseline, rows, window, now — tui/SPEC.md §7) plus the two anchoring
-// inputs the local-today cut and accent math require.
+// AggregateInput carries the spec's four aggregate() arguments (baseline,
+// rows, window, now — tui/SPEC.md §7) plus the local-today cut input and
+// the active display mode, which decides sort order.
 type AggregateInput struct {
 	// Baseline is the last usage_daily fetch (30 days, UTC-day grain).
 	Baseline []DailyRow
@@ -28,13 +28,13 @@ type AggregateInput struct {
 	// time.Local, tests pass pinned zones (core never reads the
 	// system zone itself).
 	Loc *time.Location
-	// Anchor is the accent1 anchor (tui/SPEC.md §5); the zero time
-	// disables accent1. accent2 is anchor-independent.
-	Anchor time.Time
+	// Mode is the active display mode; it decides the sort key (cost desc
+	// vs total-tokens desc, tui/SPEC.md §3). Zero value is ModeCost.
+	Mode Mode
 }
 
 // Aggregate computes the per-model window aggregates, including the
-// per-(model, provider_slug) grain and the accent token counts.
+// per-(model, provider_slug) grain.
 //
 // Source selection (tui/SPEC.md §7): today sums raw rows only, cut at
 // local midnight — the raw slice can be re-cut to any local offset
@@ -67,13 +67,12 @@ func Aggregate(in AggregateInput) []ModelStat {
 	}
 
 	models := acc.fold()
-	applyAccents(models, in, inWindow)
 
 	out := make([]ModelStat, 0, len(models))
 	for _, m := range models {
 		out = append(out, *m)
 	}
-	sortModels(out)
+	sortModels(out, in.Mode)
 	return out
 }
 
@@ -174,44 +173,10 @@ func (a *accumulator) fold() map[string]*ModelStat {
 	return models
 }
 
-// applyAccents sets Accent1Tokens/Accent2Tokens from live rows
-// (tui/SPEC.md §5): accent2 is the single most recent live arrival —
-// anchor-independent, but only if it falls inside the active window
-// (out of window it has no bar to slice, and there is no fallback);
-// accent1 sums live rows received strictly after the anchor, excluding
-// the accent2 row.
-func applyAccents(models map[string]*ModelStat, in AggregateInput, inWindow func(time.Time) bool) {
-	newest := -1
-	for i := range in.Rows {
-		if !in.Rows[i].Live {
-			continue
-		}
-		if newest < 0 || arrivedAfter(in.Rows[i], in.Rows[newest]) {
-			newest = i
-		}
-	}
-	if newest >= 0 && inWindow(in.Rows[newest].RequestedAt) {
-		if m := models[in.Rows[newest].Model]; m != nil {
-			m.Accent2Tokens = in.Rows[newest].TotalTokens()
-		}
-	}
-	if in.Anchor.IsZero() {
-		return
-	}
-	for i := range in.Rows {
-		r := in.Rows[i]
-		if !r.Live || i == newest || !inWindow(r.RequestedAt) || !r.ReceivedAt.After(in.Anchor) {
-			continue
-		}
-		if m := models[r.Model]; m != nil {
-			m.Accent1Tokens += r.TotalTokens()
-		}
-	}
-}
-
 // arrivedAfter orders live rows by arrival: ReceivedAt, ties broken by
 // RequestedAt, then by the dedupe key — fully deterministic so the
-// accent2 pick never flip-flops between equal timestamps.
+// latest-live/burst picks (tui/SPEC.md §7) never flip-flop between equal
+// timestamps.
 func arrivedAfter(a, b RequestRow) bool {
 	if !a.ReceivedAt.Equal(b.ReceivedAt) {
 		return a.ReceivedAt.After(b.ReceivedAt)
@@ -225,12 +190,15 @@ func arrivedAfter(a, b RequestRow) bool {
 	return a.SpanID > b.SpanID
 }
 
-// sortModels applies the binding list order: window cost descending,
-// ties by name ascending — stable, jitter-free (tui/SPEC.md §2).
-func sortModels(models []ModelStat) {
+// sortModels applies the binding list order in the active mode: window
+// cost descending in cost mode, total tokens descending in token mode,
+// ties by name ascending either way — stable, jitter-free, and the
+// longest bar always sits on top (tui/SPEC.md §2/§3).
+func sortModels(models []ModelStat, mode Mode) {
 	sort.Slice(models, func(i, j int) bool {
-		if models[i].Cost != models[j].Cost {
-			return models[i].Cost > models[j].Cost
+		vi, vj := models[i].Value(mode), models[j].Value(mode)
+		if vi != vj {
+			return vi > vj
 		}
 		return models[i].Name < models[j].Name
 	})

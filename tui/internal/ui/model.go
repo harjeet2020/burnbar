@@ -9,7 +9,6 @@ import (
 	"context"
 	"time"
 
-	"charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/harmonica"
 
@@ -33,7 +32,6 @@ type Model struct {
 	theme  Theme
 	glyphs Glyphs
 	keys   KeyMap
-	help   help.Model
 
 	// width/height cache the latest WindowSizeMsg — all layout derives
 	// from them on every render (tui/SPEC.md §4).
@@ -59,19 +57,6 @@ type Model struct {
 	baseline []core.DailyRow
 	rows     *core.RowStore
 	loc      *time.Location
-	// anchor is the accent1 reset point — app start, last refresh, or the
-	// last debounced focus-gain. The *effective* anchor the aggregate uses
-	// is max(anchor, now−accentWindow), a rolling floor so live rows older
-	// than accentWindow stop being highlighted even without a focus event
-	// (tui/SPEC.md §5) — see effectiveAnchor.
-	anchor time.Time
-	// focusGen guards the debounced focus-clear timer: a newer focus-gain
-	// bumps it so a stale focusClearMsg is ignored (mirrors heartbeatGen).
-	focusGen int
-	// pendingFocusAt is the time of the most recent focus-gain; the
-	// debounced clear jumps the anchor here so accent1 clears ~1 s after
-	// you click into the app (tui/SPEC.md §5).
-	pendingFocusAt time.Time
 
 	// Credits state, kept out of the snapshot until rebuilt() folds it in.
 	creditsVal   *float64
@@ -85,9 +70,15 @@ type Model struct {
 	dataErr string    // last baseline/slice fetch error, "" when clean
 	dataAt  time.Time // when the currently shown baseline was fetched
 
-	// tf is the active window; snap is the snapshot derived for it.
+	// tf is the active window; mode is the active bar display mode (`m`
+	// key, tui/SPEC.md §3); snap is the snapshot derived for them.
 	tf   core.Timeframe
+	mode core.Mode
 	snap core.Snapshot
+	// burst is the most recent coalesced live-request burst (tui/SPEC.md
+	// §5/§7), recomputed in rebuilt(); nil until the first live row of the
+	// session. Drives the single latest-burst highlight.
+	burst *core.Burst
 
 	// --- Stage D animation (tui/SPEC.md §6) -------------------------
 	// spring is the shared config; anim holds one animated bar width per
@@ -98,7 +89,7 @@ type Model struct {
 	anim      map[string]*barAnim
 	animating bool
 	// accentEmphasisUntil is the deadline through which a freshly-arrived
-	// accent2 slice renders bold — the arrival signal (tui/SPEC.md §6).
+	// burst renders bold — the arrival signal (tui/SPEC.md §6).
 	accentEmphasisUntil time.Time
 
 	// selected tracks the selected model by *name*, not row index, so
@@ -131,8 +122,7 @@ func New(cfg data.Config) Model {
 		cfg:        cfg,
 		theme:      theme,
 		glyphs:     glyphs,
-		keys:       newKeyMap(glyphs),
-		help:       newHelpModel(theme, glyphs),
+		keys:       newKeyMap(),
 		rest:       rest,
 		live:       live,
 		liveCtx:    ctx,
@@ -140,7 +130,6 @@ func New(cfg data.Config) Model {
 		sched:      data.NewCreditScheduler(),
 		rows:       core.NewRowStore(),
 		loc:        time.Local,
-		anchor:     time.Now(),
 		conn:       initialConn(live),
 		loading:    true,
 		tf:         core.TimeframeToday,
@@ -196,12 +185,14 @@ func (m Model) rebuilt(now time.Time) Model {
 		Window:   m.tf,
 		Now:      now,
 		Loc:      m.loc,
-		Anchor:   m.effectiveAnchor(now),
+		Mode:     m.mode,
 	})
 
 	var spend float64
+	var totalTokens int64
 	for _, st := range models {
 		spend += st.Cost
+		totalTokens += st.TotalTokens()
 	}
 	lastReq, lag := core.SnapshotMeta(rows, m.tf, now, m.loc)
 
@@ -209,12 +200,14 @@ func (m Model) rebuilt(now time.Time) Model {
 		Timeframe:     m.tf,
 		Models:        models,
 		Spend:         spend,
+		TotalTokens:   totalTokens,
 		Credits:       m.creditsVal,
 		CreditsAt:     m.creditsAt,
 		LastRequestAt: lastReq,
 		LagSeconds:    lag,
 		Conn:          m.conn,
 	}
+	m.burst = core.LatestBurst(rows)
 
 	// Selection follows the model name; when it left the window, fall back
 	// to the top model.
@@ -229,19 +222,6 @@ func (m Model) rebuilt(now time.Time) Model {
 	return m.ensureSelectionVisible()
 }
 
-// effectiveAnchor is the accent1 anchor the aggregate actually uses:
-// max(m.anchor, now−accentWindow). The rolling floor makes accent1 a
-// "recent activity" window that ages out on its own — applied
-// unconditionally, since keyboard focus is the only signal terminals
-// report and the meter's usual home is visible-but-unfocused beside the
-// working terminal (tui/SPEC.md §5).
-func (m Model) effectiveAnchor(now time.Time) time.Time {
-	if floor := now.Add(-accentWindow); floor.After(m.anchor) {
-		return floor
-	}
-	return m.anchor
-}
-
 // selectedIndex resolves the selected model name to its position in the
 // current snapshot; -1 when the selection isn't in this window.
 func (m Model) selectedIndex() int {
@@ -253,13 +233,14 @@ func (m Model) selectedIndex() int {
 	return -1
 }
 
-// scale is the shared bar scale S for the current snapshot (tui/SPEC.md §3).
-func (m Model) scale() int64 {
-	var max int64
+// scale is the shared bar scale S for the current snapshot, in the active
+// mode's unit (tui/SPEC.md §3).
+func (m Model) scale() float64 {
+	var max float64
 	for _, st := range m.snap.Models {
-		if t := st.TotalTokens(); t > max {
-			max = t
+		if v := st.Value(m.mode); v > max {
+			max = v
 		}
 	}
-	return core.ScaleFor(max)
+	return core.ScaleFor(max, m.mode)
 }

@@ -82,12 +82,15 @@ func (l layout) blockHeight() int {
 }
 
 // computeLayout applies the §4 height-pressure ladder in order: spacer
-// rows → status merges into hints → list scrolls.
+// rows → status merges into hints → list scrolls. Every branch reserves a
+// blank gap row at the top and bottom of the list region — not just spacer
+// mode — so whitespace never jitters as the window resizes (tui/SPEC.md
+// §2 Stage D.1).
 func computeLayout(w, h, nModels int) layout {
 	l := layout{
 		bp:        breakpointFor(w),
 		contentW:  w - 2,
-		listTop:   2,
+		listTop:   3,
 		statusRow: h - 2,
 		bottomRow: h - 1,
 	}
@@ -96,30 +99,32 @@ func computeLayout(w, h, nModels int) layout {
 		return l
 	}
 
-	// Full chrome: 2 header rows + status + hint.
-	l.listHeight = h - 4
+	// Full chrome: 3 header rows (incl. the D.1 spacer) + status + hint.
+	l.listHeight = h - 5
 
 	switch {
 	case nModels == 0:
 		l.visible = 0
-	// Spacer budget: one leading blank under the header + a blank between
-	// blocks = 3n rows.
-	case 3*nModels <= l.listHeight:
+	// Spacer budget: top gap + a blank between blocks + bottom gap = 3n+1 rows.
+	case 3*nModels+1 <= l.listHeight:
 		l.spacers = true
 		l.visible = nModels
-	case 2*nModels <= l.listHeight:
+	// No-spacer budget: top gap + bottom gap = 2n+2 rows.
+	case 2*nModels+2 <= l.listHeight:
 		l.visible = nModels
 	default:
 		// Merge status into the hint row and retry without spacers.
 		l.mergedBottom = true
 		l.statusRow = -1
-		l.listHeight = h - 3
-		if 2*nModels <= l.listHeight {
+		l.listHeight = h - 4
+		if 2*nModels+2 <= l.listHeight {
 			l.visible = nModels
 			break
 		}
-		// Still too tall: scroll. Reserve one indicator row at each end
-		// so "▲ N more" / "▼ N more" never displace blocks.
+		// Still too tall: scroll. Reserve one row at each end for the
+		// "▲ N more" / "▼ N more" indicators — the same reserved top/bottom
+		// frame as the other two branches, just filled with indicators
+		// instead of blank rows when there's more to show.
 		l.scrolling = true
 		l.visible = (l.listHeight - 2) / 2
 		if l.visible < 1 {
@@ -146,39 +151,37 @@ func (l layout) clampScroll(scroll int) int {
 }
 
 // blockAt resolves a terminal row to the index of the model block whose
-// label or bar row contains it; -1 for spacers, indicators, and anything
+// label or bar row contains it; -1 for gaps, indicators, and anything
 // outside the list. scroll must already be clamped.
 func (l layout) blockAt(y, scroll, nModels int) int {
 	if l.tooSmall || y < l.listTop || y >= l.listTop+l.listHeight {
 		return -1
 	}
 	rel := y - l.listTop
+	rel-- // top gap row, reserved in every density mode (tui/SPEC.md §2 D.1)
+	if rel < 0 {
+		return -1
+	}
 	if l.scrolling {
-		rel-- // top indicator row
-		if rel < 0 {
-			return -1
-		}
 		idx := scroll + rel/2
 		if rel/2 >= l.visible || idx >= nModels {
 			return -1
 		}
 		return idx
 	}
-	if l.spacers {
-		rel-- // leading blank row under the header
-		if rel < 0 || rel%3 == 2 {
-			return -1 // header gap or spacer row between blocks
-		}
+	if l.spacers && rel%3 == 2 {
+		return -1 // spacer row between blocks
 	}
 	idx := rel / l.blockHeight()
 	if idx >= nModels {
-		return -1
+		return -1 // bottom gap / trailing padding
 	}
 	return idx
 }
 
 // tfRange is a clickable timeframe label's cell span on header row 2
-// (0-based, [x0, x1) on terminal row y=1).
+// (0-based, [x0, x1) on terminal row y=2 — the header gained a blank
+// spacer row in Stage D.1, tui/SPEC.md §2).
 type tfRange struct {
 	tf     core.Timeframe
 	x0, x1 int

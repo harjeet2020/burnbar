@@ -21,10 +21,13 @@ type Theme struct {
 	AccentPrimary lipgloss.Style
 	// BarOutput: the output segment (paired with the ▒ glyph difference).
 	BarOutput lipgloss.Style
-	// AccentSession: accent1 slices — usage since the anchor.
-	AccentSession lipgloss.Style
-	// AccentLatest: accent2 slice — the most recent request.
-	AccentLatest lipgloss.Style
+	// AccentPrimaryBright: the latest burst's input share — a brighter
+	// shade of the input segment it belongs to, not a separate slice
+	// (tui/SPEC.md §5).
+	AccentPrimaryBright lipgloss.Style
+	// BarOutputBright: the latest burst's output share, symmetric with
+	// AccentPrimaryBright.
+	BarOutputBright lipgloss.Style
 	// Text: primary foreground for names and values.
 	Text lipgloss.Style
 	// Muted: token counts, timestamps, inactive labels, hints, the scale chip.
@@ -48,20 +51,20 @@ type Theme struct {
 func DefaultTheme() Theme {
 	muted := lipgloss.NewStyle().Foreground(lipgloss.BrightBlack)
 	return Theme{
-		AccentPrimary:     lipgloss.NewStyle().Foreground(lipgloss.Cyan),
-		BarOutput:         lipgloss.NewStyle().Foreground(lipgloss.Blue),
-		AccentSession:     lipgloss.NewStyle().Foreground(lipgloss.Yellow),
-		AccentLatest:      lipgloss.NewStyle().Foreground(lipgloss.Magenta),
-		Text:              lipgloss.NewStyle(),
-		Muted:             muted,
-		Value:             lipgloss.NewStyle().Bold(true),
-		TimeframeActive:   lipgloss.NewStyle().Foreground(lipgloss.Cyan).Reverse(true),
-		TimeframeInactive: muted,
-		StatusOK:          lipgloss.NewStyle().Foreground(lipgloss.Green),
-		StatusWarn:        lipgloss.NewStyle().Foreground(lipgloss.Yellow),
-		StatusError:       lipgloss.NewStyle().Foreground(lipgloss.Red),
-		Selected:          lipgloss.NewStyle().Foreground(lipgloss.Cyan).Bold(true),
-		OverlayBorder:     lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.BrightBlack).Padding(0, 2),
+		AccentPrimary:       lipgloss.NewStyle().Foreground(lipgloss.Cyan),
+		BarOutput:           lipgloss.NewStyle().Foreground(lipgloss.Blue),
+		AccentPrimaryBright: lipgloss.NewStyle().Foreground(lipgloss.BrightCyan),
+		BarOutputBright:     lipgloss.NewStyle().Foreground(lipgloss.BrightBlue),
+		Text:                lipgloss.NewStyle(),
+		Muted:               muted,
+		Value:               lipgloss.NewStyle().Bold(true),
+		TimeframeActive:     lipgloss.NewStyle().Foreground(lipgloss.Cyan).Reverse(true),
+		TimeframeInactive:   muted,
+		StatusOK:            lipgloss.NewStyle().Foreground(lipgloss.Green),
+		StatusWarn:          lipgloss.NewStyle().Foreground(lipgloss.Yellow),
+		StatusError:         lipgloss.NewStyle().Foreground(lipgloss.Red),
+		Selected:            lipgloss.NewStyle().Foreground(lipgloss.Cyan).Bold(true),
+		OverlayBorder:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.BrightBlack).Padding(0, 2),
 	}
 }
 
@@ -92,8 +95,11 @@ type Glyphs struct {
 	Arrow string
 	// Ellipsis marks truncation (… / ..).
 	Ellipsis string
-	// UpDown is the hint-row label for the selection keys (↑/↓ or j/k).
-	UpDown string
+	// FracTips are the eighths-resolution partial block glyphs used for the
+	// spring-animated bar's leading tip (▏▎▍▌▋▊▉, indexed eighths-1 for
+	// eighths∈[1,7]); nil in ASCII mode, which stays cell-quantized
+	// (tui/SPEC.md §6).
+	FracTips []string
 }
 
 // unicodeGlyphs is the standard set — block/box glyphs only, present in
@@ -112,7 +118,7 @@ var unicodeGlyphs = Glyphs{
 	Sep:          " · ",
 	Arrow:        "→",
 	Ellipsis:     "…",
-	UpDown:       "↑/↓",
+	FracTips:     []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"},
 }
 
 // asciiGlyphs is the degradation set for TERM=dumb / non-UTF-8 locales
@@ -131,7 +137,8 @@ var asciiGlyphs = Glyphs{
 	Sep:          " - ",
 	Arrow:        ">",
 	Ellipsis:     "..",
-	UpDown:       "j/k",
+	// FracTips stays nil: ASCII mode has no fractional glyphs, an accepted
+	// degradation (tui/SPEC.md §6).
 }
 
 // DefaultGlyphs picks the glyph set for this terminal: ASCII when the

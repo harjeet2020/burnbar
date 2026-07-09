@@ -1,8 +1,8 @@
 // Fixture data for Stage A: deterministic fake snapshots that exercise
 // every layout path — magnitude spread for the shared scale, a long slug
-// for truncation, a free model for the token-fallback split, NULL split
-// costs for the "—" rule, and accent slices on the top model. Replaced by
-// the real data layer in Stage C; kept afterwards for golden-render tests.
+// for truncation, a free model for the token-fallback split, and NULL
+// split costs for the "—" rule. Replaced by the real data layer in
+// Stage C; kept afterwards for golden-render tests.
 
 package core
 
@@ -27,8 +27,6 @@ func scaleStats(models []ModelStat, factor float64) []ModelStat {
 		if m.OutputCost != nil {
 			s.OutputCost = f64(*m.OutputCost * factor)
 		}
-		// Accents are about the last few minutes; they don't grow with
-		// the window.
 		out[i] = s
 	}
 	return out
@@ -45,10 +43,6 @@ var todayModels = []ModelStat{
 		Cost:         0.4821,
 		InputCost:    f64(0.1934),
 		OutputCost:   f64(0.2887),
-		// The top model carries the accent slices: a burst since the
-		// anchor plus the single most recent request.
-		Accent1Tokens: 180_000,
-		Accent2Tokens: 42_000,
 	},
 	{
 		Name:         "anthropic/claude-haiku-4.5",
@@ -140,11 +134,13 @@ func Fixture(tf Timeframe, now time.Time) Snapshot {
 	default:
 		models = append([]ModelStat(nil), todayModels...)
 	}
-	sortModels(models)
+	sortModels(models, ModeCost)
 
 	var spend float64
+	var totalTokens int64
 	for _, m := range models {
 		spend += m.Cost
+		totalTokens += m.TotalTokens()
 	}
 
 	lag := 2.1
@@ -152,6 +148,7 @@ func Fixture(tf Timeframe, now time.Time) Snapshot {
 		Timeframe:     tf,
 		Models:        models,
 		Spend:         spend,
+		TotalTokens:   totalTokens,
 		Credits:       f64(12.43),
 		CreditsAt:     now.Add(-2 * time.Minute),
 		LastRequestAt: now.Add(-2*time.Minute - 14*time.Second),
