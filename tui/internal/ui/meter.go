@@ -361,37 +361,55 @@ func (m Model) renderConn() string {
 // renderHints draws the bottom row: the context hint bar, in priority
 // order (tui/SPEC.md §2/§4).
 func (m Model) renderHints(l layout) string {
-	core, extra := m.keys.MeterHints()
+	entries := m.keys.MeterHints()
 	if m.scr == screenDetails {
-		core, extra = m.keys.DetailsHints()
+		entries = m.keys.DetailsHints()
 	}
-	return " " + renderPriorityHints(m.theme, m.glyphs.Sep, m.width-1, core, extra)
+	return " " + renderPriorityHints(m.theme, m.glyphs.Sep, m.width-1, entries)
 }
 
-// renderPriorityHints renders the protected core bindings unconditionally,
-// then appends extra bindings in priority order while the row still fits
-// width — replacing the help bubble's blunt "…" truncation, which could
-// hide the entire hint row on a narrow terminal (tui/SPEC.md §2 Stage D.1).
-// Greedy: stops at the first entry that doesn't fit ("added back in that
-// order as width allows").
-func renderPriorityHints(th Theme, sep string, width int, core, extra []key.Binding) string {
+// renderPriorityHints renders every entry in its fixed display order,
+// dropping removable entries (ascending rank — least essential first)
+// until the row fits width; the protected core (rank hintCore) is never
+// dropped, even if the row still overflows once only core remains.
+// Replaces the help bubble's blunt "…" truncation, which could hide the
+// entire hint row on a narrow terminal (tui/SPEC.md §2 Stage D.1).
+func renderPriorityHints(th Theme, sep string, width int, entries []hintEntry) string {
 	hint := func(b key.Binding) string {
 		return th.Text.Render(b.Help().Key) + " " + th.Muted.Render(b.Help().Desc)
 	}
 	sepStyled := th.Muted.Render(sep)
 
-	parts := make([]string, 0, len(core)+len(extra))
-	for _, b := range core {
-		parts = append(parts, hint(b))
+	present := make([]bool, len(entries))
+	for i := range present {
+		present[i] = true
 	}
-	row := strings.Join(parts, sepStyled)
-
-	for _, b := range extra {
-		candidate := strings.Join(append(append([]string{}, parts...), hint(b)), sepStyled)
-		if lipgloss.Width(candidate) > width {
-			break
+	render := func() string {
+		parts := make([]string, 0, len(entries))
+		for i, e := range entries {
+			if present[i] {
+				parts = append(parts, hint(e.binding))
+			}
 		}
-		parts, row = append(parts, hint(b)), candidate
+		return strings.Join(parts, sepStyled)
+	}
+
+	row := render()
+	for lipgloss.Width(row) > width {
+		drop := -1
+		for i, e := range entries {
+			if !present[i] || e.rank == hintCore {
+				continue
+			}
+			if drop == -1 || e.rank < entries[drop].rank {
+				drop = i
+			}
+		}
+		if drop == -1 {
+			break // only the protected core remains
+		}
+		present[drop] = false
+		row = render()
 	}
 	return row
 }

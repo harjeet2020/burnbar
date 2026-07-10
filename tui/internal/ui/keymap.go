@@ -85,18 +85,53 @@ func newKeyMap() KeyMap {
 	}
 }
 
-// MeterHints splits the main screen's hint row into a protected core
-// (always rendered) and extra bindings added back in priority order as
-// width allows (tui/SPEC.md §2 Stage D.1).
-func (k KeyMap) MeterHints() (core, extra []key.Binding) {
-	return []key.Binding{k.selectHint, k.Help, k.Quit},
-		[]key.Binding{k.Details, k.Timeframe, k.Mode, k.Refresh, k.ToggleSource}
+// hintEntry pairs a binding with its removal rank for the hint row's
+// priority collapse: hintCore marks the protected core, never dropped;
+// rank >= 1 entries drop in ascending order (lowest first) as the row
+// runs out of width. Display order is always the entries' order in the
+// slice, independent of rank — only presence is decided by rank, which
+// is what lets a protected entry (refresh) sit in the middle of the
+// display order without forcing every removable entry to its right
+// (tui/SPEC.md §2 Stage D.1).
+type hintEntry struct {
+	binding key.Binding
+	rank    int
 }
 
-// DetailsHints is the details-screen equivalent of MeterHints.
-func (k KeyMap) DetailsHints() (core, extra []key.Binding) {
-	return []key.Binding{k.Back, k.Quit},
-		[]key.Binding{k.Timeframe, k.Refresh, k.ToggleSource}
+// hintCore marks a hintEntry as always-shown.
+const hintCore = -1
+
+// MeterHints returns the main screen's hint-row entries in their fixed
+// display order: j/k select · enter details · r refresh · t window · m
+// mode · p source · ? help · q quit. The protected core (select,
+// refresh, help, quit) always renders; the rest drop by ascending rank —
+// details first, then source, then mode, then window last — until the
+// row fits (tui/SPEC.md §2).
+func (k KeyMap) MeterHints() []hintEntry {
+	return []hintEntry{
+		{k.selectHint, hintCore},
+		{k.Details, 1},
+		{k.Refresh, hintCore},
+		{k.Timeframe, 4},
+		{k.Mode, 3},
+		{k.ToggleSource, 2},
+		{k.Help, hintCore},
+		{k.Quit, hintCore},
+	}
+}
+
+// DetailsHints is the details-screen equivalent of MeterHints: back and
+// quit are always shown; source drops first, then refresh, then window
+// last — unchanged from the pre-existing behavior, just expressed in the
+// same rank form as MeterHints.
+func (k KeyMap) DetailsHints() []hintEntry {
+	return []hintEntry{
+		{k.Back, hintCore},
+		{k.Timeframe, 3},
+		{k.Refresh, 2},
+		{k.ToggleSource, 1},
+		{k.Quit, hintCore},
+	}
 }
 
 // FullHelp feeds the `?` overlay: every binding, grouped navigate /
