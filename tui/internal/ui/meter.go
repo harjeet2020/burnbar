@@ -86,7 +86,10 @@ func (m Model) timeframeSelector() (string, []tfRange) {
 }
 
 // renderBars draws region 2 of the meter screen as exactly
-// layout.listHeight rows.
+// layout.listHeight rows. The list always reserves one row at each end
+// for "N more" indicators (blank when nothing overflows in that
+// direction) and always separates blocks with a blank row — a fixed
+// rhythm that never jitters as the window resizes (tui/SPEC.md §2/§4).
 func (m Model) renderBars(l layout) []string {
 	rows := make([]string, 0, l.listHeight)
 	models := m.snap.Models
@@ -107,33 +110,33 @@ func (m Model) renderBars(l layout) []string {
 	}
 
 	scroll := l.clampScroll(m.scroll)
-	first, last := 0, len(models)
-	if l.scrolling {
-		first, last = scroll, scroll+l.visible
-		above := ""
-		if scroll > 0 {
-			above = m.theme.Muted.Render(" " + m.glyphs.MoreUp + " " + strconv.Itoa(scroll) + " more")
-		}
-		rows = append(rows, above)
+	first := scroll
+	last := scroll + l.visible
+	if last > len(models) {
+		last = len(models)
 	}
+
+	above := ""
+	if scroll > 0 {
+		above = m.theme.Muted.Render(" " + m.glyphs.MoreUp + " " + strconv.Itoa(scroll) + " more")
+	}
+	rows = append(rows, above)
 
 	scale := m.scale()
 	selIdx := m.selectedIndex()
-	for i := first; i < last && i < len(models); i++ {
-		if l.spacers && i > first {
-			rows = append(rows, "") // separator between blocks only
+	for i := first; i < last; i++ {
+		if i > first {
+			rows = append(rows, "") // spacer between blocks, always on
 		}
 		rows = append(rows, m.renderLabelRow(models[i], i == selIdx, l))
 		rows = append(rows, m.renderBarRow(models[i], scale, l))
 	}
 
-	if l.scrolling {
-		below := ""
-		if remaining := len(models) - (scroll + l.visible); remaining > 0 {
-			below = m.theme.Muted.Render(" " + m.glyphs.MoreDown + " " + strconv.Itoa(remaining) + " more")
-		}
-		rows = append(rows, below)
+	below := ""
+	if remaining := len(models) - last; remaining > 0 {
+		below = m.theme.Muted.Render(" " + m.glyphs.MoreDown + " " + strconv.Itoa(remaining) + " more")
 	}
+	rows = append(rows, below)
 
 	for len(rows) < l.listHeight {
 		rows = append(rows, "")
@@ -352,22 +355,14 @@ func (m Model) renderConn() string {
 	}
 }
 
-// renderHints draws the bottom row: the context hint bar, optionally with
-// the connection state folded in when the status row was merged away
-// under height pressure (tui/SPEC.md §4).
+// renderHints draws the bottom row: the context hint bar, in priority
+// order (tui/SPEC.md §2/§4).
 func (m Model) renderHints(l layout) string {
 	core, extra := m.keys.MeterHints()
 	if m.scr == screenDetails {
 		core, extra = m.keys.DetailsHints()
 	}
-
-	prefix := " "
-	if l.mergedBottom {
-		conn := m.renderConn()
-		prefix = " " + conn + m.theme.Muted.Render(m.glyphs.Sep)
-	}
-	width := m.width - lipgloss.Width(prefix)
-	return prefix + renderPriorityHints(m.theme, m.glyphs.Sep, width, core, extra)
+	return " " + renderPriorityHints(m.theme, m.glyphs.Sep, m.width-1, core, extra)
 }
 
 // renderPriorityHints renders the protected core bindings unconditionally,
