@@ -290,10 +290,12 @@ func (m Model) renderStatus(width int) string {
 	}
 	source := "source " + m.sourceLabel()
 
-	lastFull, lastCompact := "last request —", "last —"
+	lastFull, lastNoWord, lastCompact := "last request —", "last —", "last —"
 	if !m.snap.LastRequestAt.IsZero() {
 		clock := core.FormatClock(m.snap.LastRequestAt)
-		lastFull = "last request " + clock + " " + core.FormatRelative(time.Since(m.snap.LastRequestAt))
+		age := core.FormatRelative(time.Since(m.snap.LastRequestAt))
+		lastFull = "last request " + clock + " " + age
+		lastNoWord = "last " + clock + " " + age
 		lastCompact = "last " + clock
 	}
 
@@ -313,7 +315,8 @@ func (m Model) renderStatus(width int) string {
 	variants := [][]string{
 		{first, lag, source, scale, conn},
 		{lastFull, source, scale, conn},
-		{lastCompact, scale, conn},
+		{lastNoWord, scale, conn},  // drop the "request" word only; clock+age stay
+		{lastCompact, scale, conn}, // now shrink fully, closer to the width floor
 		{conn},
 	}
 	for _, v := range variants {
