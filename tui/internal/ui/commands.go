@@ -71,7 +71,7 @@ func waitLiveCmd(ch <-chan data.LiveEvent, gen int) tea.Cmd {
 	}
 }
 
-// fetchBaselineCmd fetches the 30-day usage_daily baseline.
+// fetchBaselineCmd fetches the 31-day usage_daily baseline.
 func (m Model) fetchBaselineCmd() tea.Cmd {
 	rest := m.rest
 	return func() tea.Msg {

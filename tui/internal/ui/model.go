@@ -52,7 +52,7 @@ type Model struct {
 	liveGen    int
 	sched      *data.CreditScheduler
 
-	// Stores the snapshot is aggregated from (tui/SPEC.md §7): the 30-day
+	// Stores the snapshot is aggregated from (tui/SPEC.md §7): the 31-day
 	// baseline view rows and the deduped raw rows (today-slice ∪ live).
 	baseline []core.DailyRow
 	rows     *core.RowStore

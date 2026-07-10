@@ -1,5 +1,5 @@
 // PostgREST client — the read side of the Supabase backend. Three
-// queries feed the meter (tui/SPEC.md §2/§7): the 30-day usage_daily
+// queries feed the meter (tui/SPEC.md §2/§7): the 31-day usage_daily
 // baseline, the today-slice of raw requests since local midnight, and
 // the inserted_at cursor query the polling LiveSource walks. All are
 // plain anon-key GETs against <supabase_url>/rest/v1; RLS makes the anon
@@ -19,10 +19,13 @@ import (
 	"github.com/harjeet2020/burnbar/tui/internal/core"
 )
 
-// baselineDays is how far back the usage_daily baseline reaches — the
-// month window plus the current UTC day, matching the backend's 30-day
-// retention (root SPEC §1). A few KB of rows; no local database needed.
-const baselineDays = 30
+// baselineDays is how far back the usage_daily baseline reaches. The
+// current UTC calendar month can start up to 30 days before today (a
+// 31-day month, viewed on its last day), so 31 guarantees the month
+// window's rows are always in the fetched range; the week window (at
+// most 6 days back) is comfortably covered by the same fetch. A few KB
+// of rows; no local database needed.
+const baselineDays = 31
 
 // restTimeout bounds a single PostgREST request. Generous enough for a
 // cold baseline over a slow link, short enough that a black-holed

@@ -325,7 +325,7 @@ message, not a fade (ANSI-16 has no alpha).
 
 **Implemented — state model** (`internal/core/rows.go`,
 `aggregate.go`; `internal/data/*`): three stores plus derived view
-state — `baseline` (`usage_daily` rows, full 30 days, tagged
+state — `baseline` (`usage_daily` rows, full 31 days, tagged
 `fetchedAt`, UTC-day grain), `rows` (raw `requests` rows, deduped by
 `(trace_id, span_id)`, from the today-slice fetch and live events;
 live rows carry `receivedAt` and drive the highlight/modal/meter lag).
@@ -338,13 +338,17 @@ in one pass.
 computed exclusively from `rows` (the raw slice can be re-cut to any
 local midnight exactly; the UTC-day-grain baseline can't) — this
 avoids a UTC "today" visibly resetting mid-session for most timezones.
-`week`/`month` = last 7/30 **UTC** days inclusive of the current UTC
-day, from baseline + live layered on top (brief overlap double-count
-self-heals on refresh). Rollover timers re-aggregate at local midnight
-(today) and UTC midnight (week/month); local-midnight math goes
-through the system timezone at each scheduling so DST is handled for
-free. Switching timeframe (`t`) is pure client-side re-aggregation, no
-refetch.
+`week`/`month` = the current **UTC** calendar week (Monday-Sunday) and
+UTC calendar month, from baseline + live layered on top (brief overlap
+double-count self-heals on refresh). UTC-anchored rather than the
+user's local calendar so the boundary lines up with the baseline's
+UTC-day grain (root SPEC §2/§6). Rollover timers re-aggregate at local
+midnight (today) and UTC midnight (week/month) — every UTC midnight is
+also a candidate calendar-week/month boundary, so the existing daily
+tick needs no separate weekly/monthly schedule; local-midnight math
+goes through the system timezone at each scheduling so DST is handled
+for free. Switching timeframe (`t`) is pure client-side re-aggregation,
+no refetch.
 
 **Implemented — startup, realtime, poll:** load config (plain
 actionable error before the alt screen on failure, exit non-zero) →

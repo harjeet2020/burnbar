@@ -24,7 +24,7 @@ OpenRouter Broadcast (Privacy Mode ON, X-Burnbar-Secret header)
     ▼
 Edge Function `ingest` — verify secret, parse, idempotent insert
     ▼
-Postgres `requests` — single source of truth (30-day pg_cron prune)
+Postgres `requests` — single source of truth (13-month pg_cron prune)
     │
     ├─ `usage_daily` view ── PostgREST ───► frontends (baseline fetch)
     └─ Realtime `requests` INSERTs ───────► frontends (live layer)
@@ -51,7 +51,7 @@ What Phases 2 & 4 build against (column details: see the migration):
   / reconnect, plus a **today-slice** query of raw `requests` rows since
   local midnight (see Windows below); aggregate over the active window
   client-side (bars sum across provider rows; the details screen uses
-  the provider split). ≤30 days of rows is a few KB — no local database
+  the provider split). ≤31 days of rows is a few KB — no local database
   needed. Timeframe switching is pure client-side re-aggregation, never
   a refetch.
 - **Ratios are derived client-side** from sums at the selected window,
@@ -74,8 +74,11 @@ What Phases 2 & 4 build against (column details: see the migration):
 - **Windows:** `today` = the user's **local** calendar day, computed
   exactly from raw `requests` rows fetched since local midnight (view
   rows are UTC-day grain and can't be re-cut to local midnights);
-  `week`/`month` = last 7/30 **UTC** days including the current UTC day,
-  from the view + live events.
+  `week`/`month` = the current **UTC** calendar week (Monday-Sunday) and
+  UTC calendar month, from the view + live events. UTC-anchored (not the
+  user's local calendar) so the boundary lines up with the view's
+  UTC-day grain — the accepted tradeoff for keeping the small daily
+  baseline instead of fetching raw rows for the whole window.
 - **NULL vs 0:** NULL means "the payload did not report this attribute",
   0 means "reported as zero" — never conflate them in derived stats.
 - **Credits:** poll `GET /api/v1/credits` directly with the user's local
@@ -239,8 +242,9 @@ this file's git history, pre-2026-07-06.)
   silently rounds on insert and unit prices reach ~1e-8/token; store
   payload values verbatim. Frontends may aggregate in float64 for
   display.
-- **macOS app: in-memory state only** — the 30-day dataset is a few KB;
-  a JSON snapshot cache is the pre-approved polish if launch feels slow.
+- **macOS app: in-memory state only** — the 31-day baseline fetch is a
+  few KB; a JSON snapshot cache is the pre-approved polish if launch
+  feels slow.
 - **Privacy Mode required in setup** — Burnbar never needs
   prompt/completion content.
 - **Live layer: realtime + polling behind one `LiveSource`** (built in
@@ -264,3 +268,18 @@ this file's git history, pre-2026-07-06.)
   library's public API. **Decision:** default flipped to `poll` (done);
   `realtime` remains available but is not recommended until the upstream
   reconnect is fixed or we ship our own thin Phoenix client.
+- **Calendar week/month windows, UTC-anchored, 13-month raw retention**
+  (2026-07-09). `week`/`month` switched from rolling last-7/30-UTC-day
+  windows to the current UTC calendar week (Monday-Sunday) and UTC
+  calendar month — `today` is unaffected (already local-calendar-day).
+  UTC rather than the user's local calendar is the accepted tradeoff:
+  it keeps the `usage_daily` baseline's UTC-day grain usable as-is,
+  avoiding a refetch on every timeframe switch. `baselineDays` bumped
+  30 → 31 so the baseline fetch always reaches a 31-day month's 1st.
+  Separately, `requests` retention (the pg_cron prune) extended from 30
+  days to 13 months — decoupled from the display windows above; Burnbar
+  has no plan for a yearly *display* view (it's a live meter, not an
+  analytics dashboard), but the extra history is kept so future static
+  analytics (month-over-month trends) can be built without re-plumbing
+  retention. 13 months, not 12, preserves the original migration's
+  one-month redundancy against the monthly cron's own scheduling slack.

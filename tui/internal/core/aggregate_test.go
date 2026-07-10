@@ -78,29 +78,33 @@ func TestAggregateTodayIgnoresBaseline(t *testing.T) {
 	}
 }
 
-func TestAggregateWeekMonthBaselineEdges(t *testing.T) {
-	now := time.Date(2026, 7, 5, 15, 0, 0, 0, time.UTC)
+func TestAggregateWeekMonthCalendarBoundaries(t *testing.T) {
+	// Wednesday 2026-07-01: the calendar month starts today, but the
+	// calendar week (Monday-Sunday) started three days ago in June —
+	// exercising a week that straddles a month boundary while the month
+	// window stays pinned to the 1st.
+	now := time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC)
 	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
 	baseline := []DailyRow{
-		{Day: day(2026, 6, 29), Model: "m/d6", RequestCount: 1, InputTokens: 10, CostUSD: 0.1}, // D-6
-		{Day: day(2026, 6, 28), Model: "m/d7", RequestCount: 1, InputTokens: 10, CostUSD: 0.1}, // D-7
-		{Day: day(2026, 6, 6), Model: "m/d29", RequestCount: 1, InputTokens: 10, CostUSD: 0.1}, // D-29
-		{Day: day(2026, 6, 5), Model: "m/d30", RequestCount: 1, InputTokens: 10, CostUSD: 0.1}, // D-30
+		{Day: day(2026, 6, 28), Model: "m/sun_prev_week", RequestCount: 1, InputTokens: 10, CostUSD: 0.1},
+		{Day: day(2026, 6, 29), Model: "m/mon", RequestCount: 1, InputTokens: 10, CostUSD: 0.1},
+		{Day: day(2026, 6, 30), Model: "m/tue", RequestCount: 1, InputTokens: 10, CostUSD: 0.1},
+		{Day: day(2026, 7, 1), Model: "m/wed_today", RequestCount: 1, InputTokens: 10, CostUSD: 0.1},
 	}
 
 	week := Aggregate(AggregateInput{Baseline: baseline, Window: TimeframeWeek, Now: now, Loc: time.UTC})
-	if len(week) != 1 || week[0].Name != "m/d6" {
-		t.Errorf("week: got %d models %v, want exactly m/d6", len(week), names(week))
+	if len(week) != 3 {
+		t.Errorf("week: got %d models %v, want m/mon+m/tue+m/wed_today", len(week), names(week))
+	}
+	for _, s := range week {
+		if s.Name == "m/sun_prev_week" {
+			t.Error("week must exclude the previous calendar week's Sunday")
+		}
 	}
 
 	month := Aggregate(AggregateInput{Baseline: baseline, Window: TimeframeMonth, Now: now, Loc: time.UTC})
-	if len(month) != 3 {
-		t.Errorf("month: got %d models %v, want m/d6+m/d7+m/d29 (D-30 excluded)", len(month), names(month))
-	}
-	for _, s := range month {
-		if s.Name == "m/d30" {
-			t.Error("month must exclude the D-30 day")
-		}
+	if len(month) != 1 || month[0].Name != "m/wed_today" {
+		t.Errorf("month: got %d models %v, want exactly m/wed_today (June rows excluded)", len(month), names(month))
 	}
 }
 

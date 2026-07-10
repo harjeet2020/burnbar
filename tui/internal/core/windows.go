@@ -1,8 +1,11 @@
 // Window math (tui/SPEC.md §7): the today window is the user's LOCAL
-// calendar day; week and month are the last 7/30 UTC days inclusive of
-// the current UTC day. Everything here is a pure function of (now, loc)
-// — core never reads time.Local or the wall clock, so tests can pin any
-// zone, including :30/:45 offsets and DST transitions.
+// calendar day; week is the current UTC calendar week (Monday-Sunday)
+// and month is the current UTC calendar month — both anchored to UTC
+// so they line up with the usage_daily baseline's UTC-day grain, at the
+// accepted cost of the boundary being UTC rather than the user's local
+// calendar. Everything here is a pure function of (now, loc) — core
+// never reads time.Local or the wall clock, so tests can pin any zone,
+// including :30/:45 offsets and DST transitions.
 
 package core
 
@@ -38,22 +41,33 @@ func NextUTCMidnight(now time.Time) time.Time {
 	return UTCDayStart(now).AddDate(0, 0, 1)
 }
 
-// UTCWindowStart returns the start of the last-N-UTC-days window
-// inclusive of the current UTC day: days D−(N−1) through D. Window
-// membership is `!t.Before(start)` for both baseline Day values and raw
-// RequestedAt instants.
-func UTCWindowStart(now time.Time, days int) time.Time {
-	return UTCDayStart(now).AddDate(0, 0, -(days - 1))
+// currentUTCWeekStart returns 00:00 UTC on the Monday of the UTC
+// calendar week containing now. time.Weekday is Sunday=0..Saturday=6,
+// so (weekday+6)%7 turns that into days-since-Monday for every day of
+// the week, including Sunday itself (0 -> 6 days back).
+func currentUTCWeekStart(now time.Time) time.Time {
+	day := UTCDayStart(now)
+	daysSinceMonday := (int(day.Weekday()) + 6) % 7
+	return day.AddDate(0, 0, -daysSinceMonday)
+}
+
+// currentUTCMonthStart returns 00:00 UTC on the 1st of now's UTC
+// calendar month.
+func currentUTCMonthStart(now time.Time) time.Time {
+	y, m, _ := now.UTC().Date()
+	return time.Date(y, m, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // WindowStart returns the inclusive lower bound of the active timeframe:
-// local midnight for today, the 7/30-UTC-day starts for week/month.
+// local midnight for today, the current UTC calendar week/month start
+// for week/month. Window membership is `!t.Before(start)` for both
+// baseline Day values and raw RequestedAt instants.
 func WindowStart(tf Timeframe, now time.Time, loc *time.Location) time.Time {
 	switch tf {
 	case TimeframeWeek:
-		return UTCWindowStart(now, 7)
+		return currentUTCWeekStart(now)
 	case TimeframeMonth:
-		return UTCWindowStart(now, 30)
+		return currentUTCMonthStart(now)
 	default:
 		return LocalMidnight(now, loc)
 	}

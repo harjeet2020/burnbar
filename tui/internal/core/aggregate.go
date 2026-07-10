@@ -15,7 +15,7 @@ import (
 // rows, window, now — tui/SPEC.md §7) plus the local-today cut input and
 // the active display mode, which decides sort order.
 type AggregateInput struct {
-	// Baseline is the last usage_daily fetch (30 days, UTC-day grain).
+	// Baseline is the last usage_daily fetch (31 days, UTC-day grain).
 	Baseline []DailyRow
 	// Rows are the deduped raw request rows (RowStore.Rows()):
 	// today-slice fetch ∪ live events.

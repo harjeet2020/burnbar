@@ -64,9 +64,11 @@ proportions to reflect how usage is spread across models.
 Broadcast feature due to errors / downtime (OpenRouter documents no
 delivery guarantees or retries). Burnbar accepts this trade-off by
 design: it is a **live meter, not an accounting system**. Broadcast data
-is the app's single source of truth and is kept for 30 days (matching
-the app's largest timeframe window; a scheduled job prunes older rows).
-The OpenRouter dashboard remains the authoritative record for billing
+is the app's single source of truth and is kept for 13 months (a
+scheduled job prunes older rows) - well beyond the app's current
+week/month windows, so future static analytics (e.g. month-over-month
+trends) can be built without re-plumbing retention. The OpenRouter
+dashboard remains the authoritative record for billing
 and long-term statistics, and the credit balance shown in the app always
 reflects your true remaining credits regardless of any missed capture.
 The upside of building on broadcast data exclusively is that it is far
@@ -75,7 +77,7 @@ routed provider (including quantization variant), cached and reasoning
 token counts, and the quoted unit prices are all captured.
 - To minimize monitoring latency, the data transmitted through the
 WebSocket (Supabase Realtime) should be minimal (most recent request
-only). Frontends fetch a small baseline (30 days of per-model daily
+only). Frontends fetch a small baseline (31 days of per-model daily
 aggregates via a single database view) on launch or manual refresh, and
 layer live request events on top in memory - the dataset is small enough
 that no local database is needed.

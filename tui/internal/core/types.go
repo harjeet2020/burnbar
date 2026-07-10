@@ -11,7 +11,8 @@ package core
 import "time"
 
 // Timeframe is the active aggregation window. "today" is the user's local
-// calendar day; week/month are the last 7/30 UTC days (root SPEC §2).
+// calendar day; week/month are the current UTC calendar week (Mon-Sun)
+// and UTC calendar month (root SPEC §2).
 type Timeframe int
 
 // The three selectable windows, in `t`-cycle order.

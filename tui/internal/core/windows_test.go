@@ -182,41 +182,71 @@ func TestUTCDayHelpers(t *testing.T) {
 	})
 }
 
-func TestUTCWindowStart(t *testing.T) {
-	now := time.Date(2026, 7, 5, 15, 0, 0, 0, time.UTC)
+func TestCurrentUTCWeekStart(t *testing.T) {
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "Sunday rolls back to the prior Monday",
+			now:  time.Date(2026, 7, 5, 15, 0, 0, 0, time.UTC), // Sunday
+			want: time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "Monday is its own week start",
+			now:  time.Date(2026, 6, 29, 9, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "Wednesday mid-week",
+			now:  time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "week crosses a month boundary",
+			now:  time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),  // Wednesday
+			want: time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC), // Monday, in June
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := currentUTCWeekStart(tt.now); !got.Equal(tt.want) {
+				t.Errorf("currentUTCWeekStart(%v) = %v, want %v", tt.now, got, tt.want)
+			}
+		})
+	}
+}
 
-	t.Run("week is D-6 .. D inclusive", func(t *testing.T) {
-		start := UTCWindowStart(now, 7)
-		want := time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC)
-		if !start.Equal(want) {
-			t.Fatalf("UTCWindowStart(7) = %v, want %v", start, want)
-		}
-		// Membership through the same predicate Aggregate uses.
-		dayIn := time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC)  // D-6
-		dayOut := time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC) // D-7
-		if dayIn.Before(start) {
-			t.Error("D-6 must be inside the week window")
-		}
-		if !dayOut.Before(start) {
-			t.Error("D-7 must be outside the week window")
-		}
-	})
-
-	t.Run("month is D-29 .. D inclusive", func(t *testing.T) {
-		start := UTCWindowStart(now, 30)
-		want := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
-		if !start.Equal(want) {
-			t.Fatalf("UTCWindowStart(30) = %v, want %v", start, want)
-		}
-		dayIn := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)  // D-29
-		dayOut := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC) // D-30
-		if dayIn.Before(start) {
-			t.Error("D-29 must be inside the month window")
-		}
-		if !dayOut.Before(start) {
-			t.Error("D-30 must be outside the month window")
-		}
-	})
+func TestCurrentUTCMonthStart(t *testing.T) {
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "mid-month",
+			now:  time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "last day of a 31-day month",
+			now:  time.Date(2026, 7, 31, 23, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "exactly the 1st",
+			now:  time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := currentUTCMonthStart(tt.now); !got.Equal(tt.want) {
+				t.Errorf("currentUTCMonthStart(%v) = %v, want %v", tt.now, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestWindowStartDispatch(t *testing.T) {
@@ -226,10 +256,10 @@ func TestWindowStartDispatch(t *testing.T) {
 	if got, want := WindowStart(TimeframeToday, now, loc), LocalMidnight(now, loc); !got.Equal(want) {
 		t.Errorf("today: %v, want %v", got, want)
 	}
-	if got, want := WindowStart(TimeframeWeek, now, loc), UTCWindowStart(now, 7); !got.Equal(want) {
+	if got, want := WindowStart(TimeframeWeek, now, loc), currentUTCWeekStart(now); !got.Equal(want) {
 		t.Errorf("week: %v, want %v", got, want)
 	}
-	if got, want := WindowStart(TimeframeMonth, now, loc), UTCWindowStart(now, 30); !got.Equal(want) {
+	if got, want := WindowStart(TimeframeMonth, now, loc), currentUTCMonthStart(now); !got.Equal(want) {
 		t.Errorf("month: %v, want %v", got, want)
 	}
 }
