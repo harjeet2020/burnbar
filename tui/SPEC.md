@@ -72,23 +72,29 @@ follows the *model* across re-sorts.
 
 ---
 
-**Implemented, pending manual verification (Stage D.1).** Header gains a blank spacer
-row between the wordmark/credits line and the timeframe/spend line (3
-rows total) so the two bands read as visually separate. The bars list
-needs a **fixed one-row gap** above its first element and below its
-last in *every* density mode (spacer / no-spacer / scroll) — today the
-gap only exists in spacer mode, so whitespace visibly jitters as the
-window resizes; the `▲`/`▼` scroll indicators should render *inside*
-that reserved frame, and the visible-block count is computed against
-the height left after reserving both gaps. The hint row should
-collapse by **priority** instead of the help bubble's blunt `…`
-truncation, which can hide *everything* on a narrow terminal:
-`j/k select · ? help · q quit` is the protected core that always fits;
-`enter details`, `t window`, `m mode`, `± zoom`, `r refresh`, `p
-source`, `i last request` are added back in that order as width allows
-(the mode/zoom/modal entries apply once D.2–D.4 ship). `?` always
-opens the full, un-collapsed overlay regardless of width. Select hint
-label should read `j/k` (arrows stay bound, undocumented).
+**Implemented (Stage D.1, revised — the original pass left a bug: the
+list's top gap was reserved in the row budget but never actually
+rendered, so it silently became bottom padding and the whitespace
+jittered as the window resized).** The screen is seven fixed rows, top
+to bottom, that never move, reorder, or disappear: 3 header rows
+(wordmark/credits, a blank spacer, timeframe/spend), a spacer, the bars
+list, a spacer, the status row, the hint row. Only the bars list's
+*content* — how many model blocks it shows — responds to window size.
+A block of k visible models always occupies `topArrowRow + k×(name, bar)
++ (k−1) inter-block spacers + bottomArrowRow` = `3k+1` rows; the arrow
+rows render blank when there's nothing to scroll in that direction, "N
+more" text when there is. The status row is never merged into the hint
+row, at any height. The hint row collapses by **priority** in a fixed
+display order rather than the help bubble's blunt `…` truncation, which
+could hide *everything* on a narrow terminal: `j/k select · enter
+details · r refresh · t window · m mode · p source · ? help · q quit` is
+the full display order; `j/k select`, `r refresh`, `? help`, `q quit` are
+the protected core that always renders, and `enter details`, `p source`,
+`m mode`, `t window` drop in that order (details first, window last) as
+width tightens — each entry's removability is independent of its
+position in the display order. `?` always opens the full,
+un-collapsed overlay regardless of width. Select hint label reads `j/k`
+(arrows stay bound, undocumented).
 
 **Implemented, pending manual verification (Stage D.2 mode indicator) — manual zoom (D.3) still pending.** Now that
 dual cost/token modes have shipped (§3), the header's active-window total and
@@ -210,18 +216,17 @@ other denomination muted beside it. Cost mode: `1.2M in · 340.2K out`
 **Implemented** (`internal/ui/layout.go`): layout derives from the
 cached `WindowSizeMsg` on every resize, no fixed dimensions. Resizing
 snaps (no animation — springs are for data changes only, §6).
-Breakpoint ladder by columns: **≥110** full labels + verbose tokens +
-spacer rows; **80–109** spacers dropped under height pressure, tokens
-compact (`1.2M→340K`); **60–79** model names middle-truncated, the
-secondary denomination dropped from the label row; **40–59** name +
-metric anchor + bar only; **below 40×10** a centered `terminal too
-small (min 40×10)` message, never a crash. Height pressure drops, in
-order: spacer rows → status row merges into hint row → list scrolls.
-Header and hint row never disappear.
-
-**Implemented, pending manual verification:** the fixed one-row list gap
-(top and bottom, across every density mode) described under Stage D.1
-in §2.
+Breakpoint ladder by columns: **≥110** full labels + verbose in/out
+token split; **80–109** model names full, but the label row's secondary
+token value is a single aggregate count in cost mode (never the
+misleading `840K→20K` in→out shorthand — a compromise view either shows
+both numbers properly or neither); **60–79** model names middle-
+truncated, the secondary denomination dropped from the label row;
+**40–59** name + metric anchor + bar only; **below 40×14** a centered
+`terminal too small (min 40×14)` message, never a crash. The seven
+screen rows (§2) are fixed at every breakpoint and every height above
+the floor — height pressure only changes how many model blocks the bars
+list shows, never which rows exist.
 
 ## 5. Color, Accents & Theming
 
@@ -546,6 +551,14 @@ verified against the running app.
   details-screen hint variant
 - [x] Select hint label `j/k` (drop the `↑/↓` glyph dependency); arrows
   stay bound and undocumented
+- [x] Post-verification fix: the list's top gap was reserved in the row
+  budget but never rendered (`renderBars` only padded at the bottom),
+  causing the reported resize jitter; `computeLayout`/`blockAt` rewritten
+  around one `3k+1`-row formula, the header/status spacers made
+  unconditional, the status row never merges away, and the hint row
+  switched to a fixed-display-order + independent-removal-rank scheme
+  (`refresh` is core but sits mid-order). `minHeight` raised 10→14 to
+  fit the seven fixed rows + the 7-row bars-list floor.
 
 ### Stage D.2 — Bar rework: dual modes, single highlight, sub-cell smoothing ✅ (2026-07-09, pending manual verification)
 

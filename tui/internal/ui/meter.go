@@ -86,7 +86,10 @@ func (m Model) timeframeSelector() (string, []tfRange) {
 }
 
 // renderBars draws region 2 of the meter screen as exactly
-// layout.listHeight rows.
+// layout.listHeight rows. The list always reserves one row at each end
+// for "N more" indicators (blank when nothing overflows in that
+// direction) and always separates blocks with a blank row — a fixed
+// rhythm that never jitters as the window resizes (tui/SPEC.md §2/§4).
 func (m Model) renderBars(l layout) []string {
 	rows := make([]string, 0, l.listHeight)
 	models := m.snap.Models
@@ -107,33 +110,33 @@ func (m Model) renderBars(l layout) []string {
 	}
 
 	scroll := l.clampScroll(m.scroll)
-	first, last := 0, len(models)
-	if l.scrolling {
-		first, last = scroll, scroll+l.visible
-		above := ""
-		if scroll > 0 {
-			above = m.theme.Muted.Render(" " + m.glyphs.MoreUp + " " + strconv.Itoa(scroll) + " more")
-		}
-		rows = append(rows, above)
+	first := scroll
+	last := scroll + l.visible
+	if last > len(models) {
+		last = len(models)
 	}
+
+	above := ""
+	if scroll > 0 {
+		above = m.theme.Muted.Render(" " + m.glyphs.MoreUp + " " + strconv.Itoa(scroll) + " more")
+	}
+	rows = append(rows, above)
 
 	scale := m.scale()
 	selIdx := m.selectedIndex()
-	for i := first; i < last && i < len(models); i++ {
-		if l.spacers && i > first {
-			rows = append(rows, "") // separator between blocks only
+	for i := first; i < last; i++ {
+		if i > first {
+			rows = append(rows, "") // spacer between blocks, always on
 		}
 		rows = append(rows, m.renderLabelRow(models[i], i == selIdx, l))
 		rows = append(rows, m.renderBarRow(models[i], scale, l))
 	}
 
-	if l.scrolling {
-		below := ""
-		if remaining := len(models) - (scroll + l.visible); remaining > 0 {
-			below = m.theme.Muted.Render(" " + m.glyphs.MoreDown + " " + strconv.Itoa(remaining) + " more")
-		}
-		rows = append(rows, below)
+	below := ""
+	if remaining := len(models) - last; remaining > 0 {
+		below = m.theme.Muted.Render(" " + m.glyphs.MoreDown + " " + strconv.Itoa(remaining) + " more")
 	}
+	rows = append(rows, below)
 
 	for len(rows) < l.listHeight {
 		rows = append(rows, "")
@@ -160,7 +163,7 @@ func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string
 		case bpWide:
 			secondary = core.FormatTokens(st.InputTokens) + " in" + g.Sep + core.FormatTokens(st.OutputTokens) + " out"
 		case bpStandard:
-			secondary = core.FormatTokens(st.InputTokens) + g.Arrow + core.FormatTokens(st.OutputTokens)
+			secondary = core.FormatTokens(st.TotalTokens())
 		}
 	}
 
@@ -287,10 +290,12 @@ func (m Model) renderStatus(width int) string {
 	}
 	source := "source " + m.sourceLabel()
 
-	lastFull, lastCompact := "last request —", "last —"
+	lastFull, lastNoWord, lastCompact := "last request —", "last —", "last —"
 	if !m.snap.LastRequestAt.IsZero() {
 		clock := core.FormatClock(m.snap.LastRequestAt)
-		lastFull = "last request " + clock + " " + core.FormatRelative(time.Since(m.snap.LastRequestAt))
+		age := core.FormatRelative(time.Since(m.snap.LastRequestAt))
+		lastFull = "last request " + clock + " " + age
+		lastNoWord = "last " + clock + " " + age
 		lastCompact = "last " + clock
 	}
 
@@ -310,7 +315,8 @@ func (m Model) renderStatus(width int) string {
 	variants := [][]string{
 		{first, lag, source, scale, conn},
 		{lastFull, source, scale, conn},
-		{lastCompact, scale, conn},
+		{lastNoWord, scale, conn},  // drop the "request" word only; clock+age stay
+		{lastCompact, scale, conn}, // now shrink fully, closer to the width floor
 		{conn},
 	}
 	for _, v := range variants {
@@ -352,48 +358,58 @@ func (m Model) renderConn() string {
 	}
 }
 
-// renderHints draws the bottom row: the context hint bar, optionally with
-// the connection state folded in when the status row was merged away
-// under height pressure (tui/SPEC.md §4).
+// renderHints draws the bottom row: the context hint bar, in priority
+// order (tui/SPEC.md §2/§4).
 func (m Model) renderHints(l layout) string {
-	core, extra := m.keys.MeterHints()
+	entries := m.keys.MeterHints()
 	if m.scr == screenDetails {
-		core, extra = m.keys.DetailsHints()
+		entries = m.keys.DetailsHints()
 	}
-
-	prefix := " "
-	if l.mergedBottom {
-		conn := m.renderConn()
-		prefix = " " + conn + m.theme.Muted.Render(m.glyphs.Sep)
-	}
-	width := m.width - lipgloss.Width(prefix)
-	return prefix + renderPriorityHints(m.theme, m.glyphs.Sep, width, core, extra)
+	return " " + renderPriorityHints(m.theme, m.glyphs.Sep, m.width-1, entries)
 }
 
-// renderPriorityHints renders the protected core bindings unconditionally,
-// then appends extra bindings in priority order while the row still fits
-// width — replacing the help bubble's blunt "…" truncation, which could
-// hide the entire hint row on a narrow terminal (tui/SPEC.md §2 Stage D.1).
-// Greedy: stops at the first entry that doesn't fit ("added back in that
-// order as width allows").
-func renderPriorityHints(th Theme, sep string, width int, core, extra []key.Binding) string {
+// renderPriorityHints renders every entry in its fixed display order,
+// dropping removable entries (ascending rank — least essential first)
+// until the row fits width; the protected core (rank hintCore) is never
+// dropped, even if the row still overflows once only core remains.
+// Replaces the help bubble's blunt "…" truncation, which could hide the
+// entire hint row on a narrow terminal (tui/SPEC.md §2 Stage D.1).
+func renderPriorityHints(th Theme, sep string, width int, entries []hintEntry) string {
 	hint := func(b key.Binding) string {
 		return th.Text.Render(b.Help().Key) + " " + th.Muted.Render(b.Help().Desc)
 	}
 	sepStyled := th.Muted.Render(sep)
 
-	parts := make([]string, 0, len(core)+len(extra))
-	for _, b := range core {
-		parts = append(parts, hint(b))
+	present := make([]bool, len(entries))
+	for i := range present {
+		present[i] = true
 	}
-	row := strings.Join(parts, sepStyled)
-
-	for _, b := range extra {
-		candidate := strings.Join(append(append([]string{}, parts...), hint(b)), sepStyled)
-		if lipgloss.Width(candidate) > width {
-			break
+	render := func() string {
+		parts := make([]string, 0, len(entries))
+		for i, e := range entries {
+			if present[i] {
+				parts = append(parts, hint(e.binding))
+			}
 		}
-		parts, row = append(parts, hint(b)), candidate
+		return strings.Join(parts, sepStyled)
+	}
+
+	row := render()
+	for lipgloss.Width(row) > width {
+		drop := -1
+		for i, e := range entries {
+			if !present[i] || e.rank == hintCore {
+				continue
+			}
+			if drop == -1 || e.rank < entries[drop].rank {
+				drop = i
+			}
+		}
+		if drop == -1 {
+			break // only the protected core remains
+		}
+		present[drop] = false
+		row = render()
 	}
 	return row
 }

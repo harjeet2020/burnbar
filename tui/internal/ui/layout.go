@@ -12,10 +12,12 @@ import (
 )
 
 // Minimum usable terminal size; below it a centered notice is rendered
-// instead of a mangled layout (tui/SPEC.md §4).
+// instead of a mangled layout (tui/SPEC.md §4). minHeight is the sum of
+// the seven fixed rows (3 header + spacer + spacer + status + hints = 7)
+// plus the 7-row floor for the bars list itself (two models minimum).
 const (
 	minWidth  = 40
-	minHeight = 10
+	minHeight = 14
 )
 
 // breakpoint buckets the width ladder of tui/SPEC.md §4.
@@ -43,7 +45,10 @@ func breakpointFor(w int) breakpoint {
 }
 
 // layout is the resolved geometry for one (width, height, model-count)
-// triple. Row coordinates are 0-based terminal rows.
+// triple. Row coordinates are 0-based terminal rows. The seven screen
+// rows (tui/SPEC.md §2) never move: 3 header rows, a spacer, the bars
+// list, a spacer, the status row, the hint row — only listHeight (and
+// how many model blocks fit inside it) responds to window size.
 type layout struct {
 	tooSmall bool
 	bp       breakpoint
@@ -52,89 +57,55 @@ type layout struct {
 	contentW int
 
 	// listTop / listHeight bound region 2 (bars list / details / overlay).
+	// listTop is fixed at 4 (3 header rows + the row-4 spacer).
 	listTop    int
 	listHeight int
 
-	// spacers: a blank row between model blocks (dropped first under
-	// height pressure, tui/SPEC.md §2/§4).
-	spacers bool
-	// mergedBottom: the status row has been folded into the hint row
-	// (second pressure step).
-	mergedBottom bool
-	// scrolling: the list cannot fit even merged; blocks scroll with
-	// edge indicator rows reserved at both ends (third pressure step).
+	// scrolling: the list can't show every model at once; "N more"
+	// indicator rows are reserved at both ends of the list either way
+	// (blank when there's nothing to show in that direction).
 	scrolling bool
 	// visible is how many model blocks render at once.
 	visible int
 	// maxScroll clamps Model.scroll.
 	maxScroll int
-
-	statusRow int // -1 when merged
-	bottomRow int // hint row (or merged status+hint row)
 }
 
-// blockHeight is a model block's rows: label + bar (+1 when spacers on).
-func (l layout) blockHeight() int {
-	if l.spacers {
-		return 3
-	}
-	return 2
-}
-
-// computeLayout applies the §4 height-pressure ladder in order: spacer
-// rows → status merges into hints → list scrolls. Every branch reserves a
-// blank gap row at the top and bottom of the list region — not just spacer
-// mode — so whitespace never jitters as the window resizes (tui/SPEC.md
-// §2 Stage D.1).
+// computeLayout fixes every row (tui/SPEC.md §2/§4): header (3) + spacer
+// + bars list + spacer + status + hints. The bars list always reserves
+// one row at each end for "N more" indicators (blank when there's
+// nothing to show) and always separates blocks with a blank row — never
+// conditional on available height, so whitespace never jitters as the
+// window resizes. A block of k visible models needs exactly 3k+1 rows
+// (the two indicator rows + k×(name, bar) + (k−1) inter-block spacers);
+// the largest k that fits is how many render before the list scrolls.
 func computeLayout(w, h, nModels int) layout {
 	l := layout{
-		bp:        breakpointFor(w),
-		contentW:  w - 2,
-		listTop:   3,
-		statusRow: h - 2,
-		bottomRow: h - 1,
+		bp:       breakpointFor(w),
+		contentW: w - 2,
+		listTop:  4,
 	}
 	if w < minWidth || h < minHeight {
 		l.tooSmall = true
 		return l
 	}
 
-	// Full chrome: 3 header rows (incl. the D.1 spacer) + status + hint.
-	l.listHeight = h - 5
-
-	switch {
-	case nModels == 0:
-		l.visible = 0
-	// Spacer budget: top gap + a blank between blocks + bottom gap = 3n+1 rows.
-	case 3*nModels+1 <= l.listHeight:
-		l.spacers = true
-		l.visible = nModels
-	// No-spacer budget: top gap + bottom gap = 2n+2 rows.
-	case 2*nModels+2 <= l.listHeight:
-		l.visible = nModels
-	default:
-		// Merge status into the hint row and retry without spacers.
-		l.mergedBottom = true
-		l.statusRow = -1
-		l.listHeight = h - 4
-		if 2*nModels+2 <= l.listHeight {
-			l.visible = nModels
-			break
-		}
-		// Still too tall: scroll. Reserve one row at each end for the
-		// "▲ N more" / "▼ N more" indicators — the same reserved top/bottom
-		// frame as the other two branches, just filled with indicators
-		// instead of blank rows when there's more to show.
-		l.scrolling = true
-		l.visible = (l.listHeight - 2) / 2
-		if l.visible < 1 {
-			l.visible = 1
-		}
-		if l.visible > nModels {
-			l.visible = nModels
-		}
-		l.maxScroll = nModels - l.visible
+	l.listHeight = h - 7
+	if nModels == 0 {
+		return l
 	}
+
+	maxVisible := (l.listHeight - 1) / 3
+	if maxVisible < 1 {
+		maxVisible = 1 // defensive: minHeight already guarantees >= 2
+	}
+	if nModels <= maxVisible {
+		l.visible = nModels
+		return l
+	}
+	l.scrolling = true
+	l.visible = maxVisible
+	l.maxScroll = nModels - maxVisible
 	return l
 }
 
@@ -151,30 +122,27 @@ func (l layout) clampScroll(scroll int) int {
 }
 
 // blockAt resolves a terminal row to the index of the model block whose
-// label or bar row contains it; -1 for gaps, indicators, and anything
-// outside the list. scroll must already be clamped.
+// label or bar row contains it; -1 for the top/bottom arrow-indicator
+// rows, the inter-block spacers, and anything outside the list. scroll
+// must already be clamped.
 func (l layout) blockAt(y, scroll, nModels int) int {
 	if l.tooSmall || y < l.listTop || y >= l.listTop+l.listHeight {
 		return -1
 	}
 	rel := y - l.listTop
-	rel-- // top gap row, reserved in every density mode (tui/SPEC.md §2 D.1)
+	rel-- // top arrow-indicator row, always reserved
 	if rel < 0 {
 		return -1
 	}
-	if l.scrolling {
-		idx := scroll + rel/2
-		if rel/2 >= l.visible || idx >= nModels {
-			return -1
-		}
-		return idx
+	if rel%3 == 2 {
+		// Either the spacer between two blocks, or — for the last
+		// visible block — the slot the bottom arrow-indicator row
+		// occupies; both are non-hits.
+		return -1
 	}
-	if l.spacers && rel%3 == 2 {
-		return -1 // spacer row between blocks
-	}
-	idx := rel / l.blockHeight()
-	if idx >= nModels {
-		return -1 // bottom gap / trailing padding
+	idx := scroll + rel/3
+	if rel/3 >= l.visible || idx >= nModels {
+		return -1
 	}
 	return idx
 }

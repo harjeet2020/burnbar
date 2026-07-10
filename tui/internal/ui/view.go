@@ -21,9 +21,10 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// render assembles the frame: header, region 2 (bars, details, or the
-// help overlay), status row, hint row. Regions never move or reorder
-// (tui/SPEC.md §2).
+// render assembles the frame: header, a spacer, region 2 (bars, details,
+// or the help overlay), a spacer, the status row, the hint row. All
+// seven rows are fixed — only how many model blocks region 2 shows
+// responds to window size (tui/SPEC.md §2).
 func (m Model) render() string {
 	if m.width == 0 || m.height == 0 {
 		return "" // first WindowSizeMsg hasn't arrived yet
@@ -31,9 +32,9 @@ func (m Model) render() string {
 
 	l := computeLayout(m.width, m.height, len(m.snap.Models))
 	if l.tooSmall {
-		msg := m.theme.Muted.Render("terminal too small (min 40×10)")
+		msg := m.theme.Muted.Render("terminal too small (min 40×14)")
 		if m.glyphs.Arrow == ">" { // ASCII mode
-			msg = m.theme.Muted.Render("terminal too small (min 40x10)")
+			msg = m.theme.Muted.Render("terminal too small (min 40x14)")
 		}
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, msg)
 	}
@@ -50,10 +51,10 @@ func (m Model) render() string {
 
 	rows := make([]string, 0, m.height)
 	rows = append(rows, m.renderHeader())
+	rows = append(rows, "") // row 4: spacer before the bars list
 	rows = append(rows, region2...)
-	if !l.mergedBottom {
-		rows = append(rows, m.renderStatus(m.width))
-	}
+	rows = append(rows, "") // spacer before the status row
+	rows = append(rows, m.renderStatus(m.width))
 	rows = append(rows, m.renderHints(l))
 	return strings.Join(rows, "\n")
 }
