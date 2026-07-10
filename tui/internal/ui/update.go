@@ -84,12 +84,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		now := time.Now()
 		m.rows.ClearFetched()
 		m = m.rebuilt(now)
-		return m.withAnim(tea.Batch(m.fetchTodaySliceCmd(), armLocalRollover(now, m.loc)))
+		return m.withSyncedAnim(tea.Batch(m.fetchTodaySliceCmd(), armLocalRollover(now, m.loc)))
 	case utcRolloverMsg:
 		// UTC midnight: week/month day boundaries shifted — re-aggregate
 		// (no refetch) and reschedule (tui/SPEC.md §7).
 		now := time.Now()
-		return m.rebuilt(now).withAnim(armUTCRollover(now))
+		return m.rebuilt(now).withSyncedAnim(armUTCRollover(now))
 	case animTickMsg:
 		// One frame: advance every spring; when all have settled, stop the
 		// loop and go back to 0 fps (tui/SPEC.md §6).
@@ -121,7 +121,7 @@ func (m Model) handleLive(ev data.LiveEvent) (tea.Model, tea.Cmd) {
 		// so stale live rows go and the baseline+slice are refetched.
 		m.rows.ClearLive()
 		m = m.rebuilt(time.Now())
-		return m.withAnim(tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh, m.liveGen)))
+		return m.withSyncedAnim(tea.Batch(m.fetchBaselineCmd(), m.fetchTodaySliceCmd(), waitLiveCmd(m.liveCh, m.liveGen)))
 	case data.LiveRow:
 		now := time.Now()
 		isNew := m.rows.Upsert(ev.Row)
@@ -154,7 +154,7 @@ func (m Model) handleBaseline(msg baselineMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.dataErr = ""
 	m.dataAt = time.Now()
-	return m.rebuilt(time.Now()).withAnim(nil)
+	return m.rebuilt(time.Now()).withSyncedAnim(nil)
 }
 
 // handleTodaySlice folds the fetched raw rows into the store (as fetched,
@@ -169,7 +169,7 @@ func (m Model) handleTodaySlice(msg todaySliceMsg) (tea.Model, tea.Cmd) {
 	}
 	m.loading = false
 	m.dataErr = ""
-	return m.rebuilt(time.Now()).withAnim(nil)
+	return m.rebuilt(time.Now()).withSyncedAnim(nil)
 }
 
 // handleCredits folds a credits result in and re-arms the idle heartbeat
@@ -265,8 +265,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Modal):
 		m.showModal = true
 	case key.Matches(msg, k.Timeframe):
-		// A window switch re-cuts the data → animate the new bar lengths.
-		return m.setTimeframe(m.tf.Next()).withAnim(nil)
+		// A window switch re-cuts the data → animate the new bar lengths,
+		// all in sync (tui/SPEC.md §6 fade).
+		return m.setTimeframe(m.tf.Next()).withSyncedAnim(nil)
 	case key.Matches(msg, k.Refresh):
 		return m.refresh()
 	case key.Matches(msg, k.ToggleSource):
@@ -277,22 +278,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// also re-baselines the view, so a pinned manual zoom resets.
 		m.mode = m.mode.Toggle()
 		m.manualScale = nil
-		return m.rebuilt(time.Now()).withAnim(nil)
+		return m.rebuilt(time.Now()).withSyncedAnim(nil)
 	case m.scr == screenMeter && key.Matches(msg, k.ZoomOut):
 		// `-` zooms out: next larger rung on the shared ladder (tui/SPEC.md
 		// §3 manual zoom, Stage D.3).
 		s := core.NextScale(m.scale(), 1, m.mode)
 		m.manualScale = &s
-		return m.withAnim(nil)
+		return m.withSyncedAnim(nil)
 	case m.scr == screenMeter && key.Matches(msg, k.ZoomIn):
 		// `+`/`=` zooms in: next smaller rung; bars over the new scale
 		// clamp to full width rather than the ladder re-expanding.
 		s := core.NextScale(m.scale(), -1, m.mode)
 		m.manualScale = &s
-		return m.withAnim(nil)
+		return m.withSyncedAnim(nil)
 	case m.scr == screenMeter && key.Matches(msg, k.ZoomReset):
 		m.manualScale = nil
-		return m.withAnim(nil)
+		return m.withSyncedAnim(nil)
 	case m.scr == screenMeter && key.Matches(msg, k.Up):
 		m = m.moveSelection(-1)
 	case m.scr == screenMeter && key.Matches(msg, k.Down):
@@ -336,7 +337,7 @@ func (m Model) refresh() (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	return m.withAnim(tea.Batch(cmds...))
+	return m.withSyncedAnim(tea.Batch(cmds...))
 }
 
 // toggleSource swaps the live source between realtime and poll at runtime
@@ -433,7 +434,7 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		_, ranges := m.timeframeSelector()
 		for _, r := range ranges {
 			if msg.X >= r.x0 && msg.X < r.x1 {
-				return m.setTimeframe(r.tf).withAnim(nil)
+				return m.setTimeframe(r.tf).withSyncedAnim(nil)
 			}
 		}
 		return m, nil

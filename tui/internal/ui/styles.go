@@ -28,6 +28,13 @@ type Theme struct {
 	// BarOutputBright: the latest burst's output share, symmetric with
 	// AccentPrimaryBright.
 	BarOutputBright lipgloss.Style
+	// FadeColor: the flat ANSI-16 color for a bar's whole interior while
+	// its length animation is in flight (tui/SPEC.md §6 fade) — no real
+	// segment/highlight color is computed until the bar is at rest.
+	// Provisional hardcoded ANSI Yellow; intended to become a configurable
+	// token under the not-yet-built Stage E.1 live theme picker (§5)
+	// alongside the other tokens.
+	FadeColor lipgloss.Style
 	// Text: primary foreground for names and values.
 	Text lipgloss.Style
 	// Muted: token counts, timestamps, inactive labels, hints, the scale chip.
@@ -55,6 +62,7 @@ func DefaultTheme() Theme {
 		BarOutput:           lipgloss.NewStyle().Foreground(lipgloss.Blue),
 		AccentPrimaryBright: lipgloss.NewStyle().Foreground(lipgloss.BrightCyan),
 		BarOutputBright:     lipgloss.NewStyle().Foreground(lipgloss.BrightBlue),
+		FadeColor:           lipgloss.NewStyle().Foreground(lipgloss.Yellow),
 		Text:                lipgloss.NewStyle(),
 		Muted:               muted,
 		Value:               lipgloss.NewStyle().Bold(true),
@@ -103,6 +111,12 @@ type Glyphs struct {
 	// eighths∈[1,7]); nil in ASCII mode, which stays cell-quantized
 	// (tui/SPEC.md §6).
 	FracTips []string
+	// FadeRamp are the density-ramp glyphs (░ ▒ ▓), stepped through when a
+	// bar's fade enters/exits (tui/SPEC.md §6 fade), indexed by fadeStep.
+	// nil in ASCII mode — no ASCII glyph exists for "partial density," so
+	// ASCII bars go solid for the whole fade instead of ramping (same
+	// accepted-degradation treatment as FracTips).
+	FadeRamp []string
 }
 
 // unicodeGlyphs is the standard set — block/box glyphs only, present in
@@ -123,6 +137,7 @@ var unicodeGlyphs = Glyphs{
 	Ellipsis:     "…",
 	ManualMark:   "·manual",
 	FracTips:     []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"},
+	FadeRamp:     []string{"░", "▒", "▓"},
 }
 
 // asciiGlyphs is the degradation set for TERM=dumb / non-UTF-8 locales
@@ -144,6 +159,8 @@ var asciiGlyphs = Glyphs{
 	ManualMark:   "*manual",
 	// FracTips stays nil: ASCII mode has no fractional glyphs, an accepted
 	// degradation (tui/SPEC.md §6).
+	// FadeRamp stays nil for the same reason: no ASCII "partial density"
+	// glyph exists, so ASCII bars fade in/out solid instead of ramping.
 }
 
 // DefaultGlyphs picks the glyph set for this terminal: ASCII when the

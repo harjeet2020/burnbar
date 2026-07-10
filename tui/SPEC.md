@@ -321,14 +321,56 @@ decelerates. Fix is not more fps (the choppiness is spatial, not
 temporal) but **8× finer horizontal resolution**: render the bar's
 leading tip as a fractional block glyph (`▏▎▍▌▋▊▉█`, eighths) in the
 tip's color, so the edge advances in eighth-cell steps (the standard
-`pv`/`btop` technique). The tip stays a **solid** partial block even
-when it sits in the shaded output segment (no partial-width `▒`) —
-a deliberate glyph mix, tune by feel. Interior seams (split boundary,
-highlight edges) don't need this, only the overall length change does.
-ASCII/`NO_COLOR` fallback has no fractional glyphs and stays
-cell-quantized — an accepted degradation, not a bug. The highlight
-arrival's ~1 s bold pulse (§5) is also implemented here as one timed
-message, not a fade (ANSI-16 has no alpha).
+`pv`/`btop` technique). ASCII/`NO_COLOR` fallback has no fractional
+glyphs and stays cell-quantized — an accepted degradation, not a bug.
+The highlight arrival's ~1 s bold pulse (§5) is implemented here as one
+timed message, not a fade (ANSI-16 has no alpha).
+
+**Implemented — Interior fade (Stage D.5, 2026-07-10).** Interior seams
+(the input/output split boundary, the two burst-highlight edges) turned
+out to need smoothing too: recomputing them every frame against the
+live, moving bar width made them jump by whole cells, and made the
+highlight boundary specifically flicker (a cell rendered as the plain
+growing tip could be retroactively reclassified bright the instant it
+became whole). Rather than sub-cell-animating three separate interior
+boundaries — which also runs into a wall the leading tip doesn't: the
+input zone's glyph (`█`, solid) and the output zone's glyph (`▒`,
+dithered) have no shared partial-glyph representation for a fractional
+boundary between them — a bar's length animation instead brackets
+itself in a uniform-color fade: the whole bar (solid cells + fractional
+tip) renders as one flat ANSI-16 color with no split and no highlight
+while in flight, and real `SplitBar` geometry is only ever computed once
+the bar is at rest. The fade illusion itself is density-based (`░▒▓`,
+ramping in/out around a solid hold), not a color gradient — ANSI-16 has
+no knowable "halfway between yellow and blue" without assuming RGB
+values the terminal might not use, so this works identically on a
+16-color terminal and a truecolor one. See Stage D.5 (§10) for the
+implementation.
+
+**Implemented — Synced batch fade + fade-then-move ordering (Stage
+D.6, 2026-07-10).** Two refinements to D.5's fade, both found by using
+it: first, `stepFade` used to move the spring the same frame the
+entering ramp began, so a bar's color and its length were changing
+simultaneously; it now sequences the two strictly — a bar sits frozen
+through the whole entering ramp, only starts moving once solid-held,
+and only starts exiting once settled — so every bar always reads as
+fade in, then move, then fade out. Second, a *batch* data change
+(mode/timeframe/scale, a manual refresh, a midnight rollover, or any
+full baseline/today-slice re-fetch — anything that re-cuts every
+visible bar's target in one `Update()` call) used to let each bar fade
+out independently the instant its own spring settled, which read as
+chaotic when several bars resized by different amounts at once. These
+triggers now go through `withSyncedAnim` instead of `withAnim`: every
+tracked bar — including ones whose target isn't moving at all, so a
+stationary bar still gains the fade color — enters together, and
+`stepAnim` holds the whole group at `fadeHeld` until every bar has
+settled, then exits them all on the same frame. A single live request
+landing (`handleLive`'s `LiveRow` case) is the one path that
+deliberately keeps using plain `withAnim`: real-time arrivals are rare
+enough to overlap that one bar animating quicker than another still
+carries information (which model's request landed first / hit
+harder), so those stay independent and out of sync with each other, by
+design. See Stage D.6 (§10) for the implementation.
 
 ## 7. Data & State Logic
 
@@ -640,6 +682,102 @@ reuse — worth a look next time a real burst lands.
 - [x] Modal overlay reusing the `renderHelpOverlay` pattern; `i`
   binding + hint-row/`?`-help entries
 - [x] Live update in place; empty state before the first live request
+
+### Stage D.5 — Bar interior fade ✅ (2026-07-10, mode/zoom/resize/ASCII verified; live-burst case unverified)
+
+**Goal / Done when:** see §6's "Interior fade." Fixes two problems found
+while eyeballing D.2/D.3 against the running app: the input/output split
+and burst-highlight boundaries jumped by whole cells every animation
+frame (no sub-cell smoothing existed for them, unlike the leading tip),
+and the highlight boundary specifically *flickered* — a cell rendered as
+the plain growing tip could be retroactively reclassified bright the
+instant it became a whole cell, since `core.SplitBar` was recomputed
+against the live, moving width every frame. Implemented in
+`internal/ui/anim.go` (`fadePhase`, `barAnim.fade`/`fadeStep`,
+`settledAt`, `stepFade`, `stepAnim`/`snapBars` updated to drive it),
+`internal/ui/meter.go` (`renderBarRow` split into `renderFadingBar`/
+`renderResolvedBar`), `internal/ui/styles.go` (`Theme.FadeColor`,
+`Glyphs.FadeRamp`). `stepFade`'s phase transitions are unit-tested in
+`internal/ui/anim_test.go`. Verified against the running app with real
+backend data: a mode toggle shows the entering ramp (`░→▒→▓`, byte-level
+confirmed against the actual escape sequences) holding solid yellow,
+then correctly revealing the true split color on settle; a terminal
+resize shows zero yellow at any point (confirms the snap-clears-fade
+path); `TERM=dumb`/`NO_COLOR` runs and exits cleanly with no ramp; the
+debug log confirms the tick loop starts once and stops exactly once
+per change, never getting stuck mid-fade. Not verified: a live request
+landing mid-fade on a growing bar (the specific flicker regression this
+change targets) and a brand-new model's first grow-in, since no live
+request landed during this session — worth a look next time one does,
+same caveat as D.4.
+
+- [x] While a bar's length animation is in flight, render the whole bar
+  as one uniform ANSI-16 color (provisional yellow) with no split and no
+  highlight; real `SplitBar` geometry is only ever computed once the bar
+  is at rest — which also eliminates the highlight flicker as a side
+  effect, since `SplitBar` can no longer see a moving width
+- [x] Entering/exiting sub-phases ramp through the density glyphs
+  (`░▒▓`) for `fadeRampFrames` ticks each, bracketing a solid hold for
+  the rest of the motion — a true color gradient isn't possible under
+  the ANSI-16-only rule (§5), so the fade illusion is density-based, not
+  a color blend
+- [x] Exit is gated on the spring's own `settledAt` epsilon, not a fixed
+  timer, so the dematerialize always finishes exactly when the length
+  animation does; a retarget mid-exit pops back to held rather than
+  re-flashing
+- [x] Resize (`snapBars`) clears any in-flight fade instantly, same as
+  it already snaps position — no fade ever appears on resize (§4)
+- [x] ASCII/`NO_COLOR` mode keeps the uniform-fill mechanism (still
+  fixes both bugs, since the instability was in `SplitBar`'s inputs, not
+  glyph choice) but skips the density ramp — solid fill for the whole
+  fade, the same accepted degradation as `FracTips`
+
+### Stage D.6 — Synced batch fade + fade-then-move ordering ✅ (2026-07-10)
+
+**Goal / Done when:** see §6's "Synced batch fade + fade-then-move
+ordering." Two refinements requested after using D.5's fade in the
+running app. Implemented in `internal/ui/anim.go` (`stepFade` gained an
+`autoExit` parameter and now sequences entering/held/exiting instead of
+stepping the spring every tick regardless of phase; new
+`Model.animSync` field; new `withSyncedAnim`, parallel to `withAnim`;
+`stepAnim` gained the group hold-then-flip-together logic), and
+`internal/ui/meter.go` (`renderFadingBar`'s ramp-step→glyph index is now
+scaled by `len(g.FadeRamp)/fadeRampFrames`, since doubling
+`fadeRampFrames` outran the fixed 3-glyph `░▒▓` set). `fadeRampFrames`
+doubled from 3 to 6 (~100ms → ~200ms). Every call site that re-cuts the
+whole visible bar set in one `Update()` — timeframe switch (key and
+click), mode toggle, the three zoom bindings, manual refresh, both
+midnight rollovers, `LiveJoined`'s reconnect re-baseline, and the
+baseline/today-slice fetch-result handlers — now calls `withSyncedAnim`;
+only `handleLive`'s `LiveRow` case (a single live upsert) still calls
+`withAnim`. Covered by new cases in `internal/ui/anim_test.go`: the
+entering ramp freezes position, a `fadeHeld` bar with `autoExit=false`
+doesn't self-exit on settling, a stationary bar still gets forced into
+`fadeEntering` by `withSyncedAnim`, and the full group scenario (one
+moving bar, one stationary bar) holds until the mover settles and then
+exits both on the same tick. `go build`/`go vet`/`go test ./...` all
+clean; not yet eyeballed against the running app with real backend data
+— worth a look next session, same caveat as D.4/D.5's "verify against a
+live request" note.
+
+- [x] `stepFade`: entering freezes the spring for the whole ramp; only
+  `fadeHeld` steps `spring.Update`; exiting still gates on `settledAt`
+  and still pops retargets-mid-exit back to held without re-flashing
+- [x] `autoExit` parameter: individual/live bars still exit `fadeHeld`
+  the instant they personally settle; bars in a synced batch wait for
+  `stepAnim`'s group check instead
+- [x] `withSyncedAnim`: force-starts `fadeEntering` on every tracked bar
+  (moving or not) and sets `Model.animSync`; `stepAnim` flips every
+  `fadeHeld` bar to `fadeExiting` together only once none are still
+  entering and all are settled
+- [x] Every batch-triggering call site (timeframe, mode, zoom ×3,
+  refresh, both rollovers, `LiveJoined`, baseline/slice fetch results)
+  switched from `withAnim` to `withSyncedAnim`; `LiveRow` deliberately
+  left on `withAnim` so real-time arrivals stay independent
+- [x] `snapBars` (resize) also clears `animSync` — a resize pre-empts
+  an in-flight synced batch same as it already pre-empts individual fades
+- [x] `fadeRampFrames` 3 → 6; `renderFadingBar`'s glyph index scaled so
+  the fixed 3-glyph `░▒▓` ramp still spans the doubled frame count
 
 ### Stage E — Details screen
 

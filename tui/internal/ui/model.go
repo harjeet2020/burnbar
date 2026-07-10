@@ -94,6 +94,9 @@ type Model struct {
 	spring    harmonica.Spring
 	anim      map[string]*barAnim
 	animating bool
+	// animSync marks the in-flight batch as synchronized — set by
+	// withSyncedAnim, consumed by stepAnim (tui/SPEC.md §6 fade).
+	animSync bool
 	// accentEmphasisUntil is the deadline through which a freshly-arrived
 	// burst renders bold — the arrival signal (tui/SPEC.md §6).
 	accentEmphasisUntil time.Time

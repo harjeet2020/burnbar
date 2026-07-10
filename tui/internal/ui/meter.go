@@ -191,19 +191,67 @@ func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string
 	return prefix + nameStyled + strings.Repeat(" ", pad) + right
 }
 
-// renderBarRow draws a model's bar: length ∝ the active mode's value on the
-// shared scale, interior split at that mode's boundary, the latest burst
-// painted as a brighter shade at the trailing edge of each segment it
-// belongs to — never a separate slice (tui/SPEC.md §3/§5/§6).
+// renderBarRow draws a model's bar. While its length animation is in flight
+// (entering/held/exiting a fade, tui/SPEC.md §6) it renders as one uniform
+// run in the fade color with no split and no burst highlight; only once the
+// bar is at rest does it compute and render the real split/highlight
+// geometry. This also means core.SplitBar is never called against a
+// moving width anymore — the highlight boundary can no longer be
+// recomputed against a live, changing whole, which is what made it flicker
+// before the fade existed.
 func (m Model) renderBarRow(st core.ModelStat, scale float64, l layout) string {
-	th, g := m.theme, m.glyphs
-
-	// The bar's total width is spring-animated (tui/SPEC.md §6); its
-	// interior is recomputed as fractions of whatever width is on screen
-	// this frame. target is the steady-state width the spring pulls toward.
-	// whole/eighths split the animated position for the fractional tip.
 	target := core.BarWidth(l.contentW, st.Value(m.mode), scale)
-	whole, eighths := m.barDisplayEighths(st.Name, target, l.contentW)
+
+	a := m.anim[st.Name]
+	if a != nil && (a.fade != fadeNone || !a.settledAt(float64(target))) {
+		whole, eighths := m.barDisplayEighths(st.Name, target, l.contentW)
+		return m.renderFadingBar(a, whole, eighths)
+	}
+	return m.renderResolvedBar(st, target)
+}
+
+// renderFadingBar draws a bar mid-length-animation: whole solid-fill cells
+// plus the existing fractional leading tip (barDisplayEighths, unchanged),
+// all in one flat ANSI-16 color (th.FadeColor) — no segment split, no
+// burst highlight. The entering/exiting sub-phases additionally swap the
+// fill glyph through the density ramp (░▒▓) instead of the solid glyph, in
+// Unicode mode only; ASCII/NO_COLOR mode has no distinct density glyphs and
+// stays solid for the whole fade (an accepted degradation, matching
+// FracTips's existing ASCII fallback).
+func (m Model) renderFadingBar(a *barAnim, whole, eighths int) string {
+	th, g := m.theme, m.glyphs
+	if whole == 0 && eighths == 0 {
+		return ""
+	}
+
+	glyph := g.BarInput
+	if a.fade != fadeHeld && g.FadeRamp != nil {
+		step := a.fadeStep
+		if a.fade == fadeExiting {
+			step = fadeRampFrames - 1 - step
+		}
+		// fadeRampFrames can run longer than there are density glyphs (it
+		// was doubled independently of the fixed ░▒▓ set), so scale the
+		// frame index down into the glyph range — each glyph then holds
+		// for an even share of the ramp instead of indexing out of range.
+		glyph = g.FadeRamp[step*len(g.FadeRamp)/fadeRampFrames]
+	}
+
+	var b strings.Builder
+	b.WriteString(" ")
+	b.WriteString(th.FadeColor.Render(strings.Repeat(glyph, whole)))
+	if eighths > 0 && g.FracTips != nil {
+		b.WriteString(th.FadeColor.Render(g.FracTips[eighths-1]))
+	}
+	return b.String()
+}
+
+// renderResolvedBar draws a bar at rest: the real input/output split with
+// the latest-burst highlight (tui/SPEC.md §3/§5). Only ever called once a
+// bar's spring and fade have both fully settled, so target is always the
+// final, non-moving width.
+func (m Model) renderResolvedBar(st core.ModelStat, target int) string {
+	th, g := m.theme, m.glyphs
 
 	inputFrac := core.SplitFraction(st, m.mode)
 	var brightInputFrac, brightOutputFrac float64
@@ -213,8 +261,8 @@ func (m Model) renderBarRow(st core.ModelStat, scale float64, l layout) string {
 			brightOutputFrac = m.burst.OutputValue(m.mode) / denom
 		}
 	}
-	geo := core.SplitBar(whole, inputFrac, brightInputFrac, brightOutputFrac)
-	if geo.Cells == 0 && eighths == 0 {
+	geo := core.SplitBar(target, inputFrac, brightInputFrac, brightOutputFrac)
+	if geo.Cells == 0 {
 		return ""
 	}
 
@@ -255,24 +303,6 @@ func (m Model) renderBarRow(st core.ModelStat, scale float64, l layout) string {
 	b.WriteString(run(plainInputEnd, geo.InputCells, brightIn))
 	b.WriteString(run(geo.InputCells, plainOutputEnd, th.BarOutput))
 	b.WriteString(run(plainOutputEnd, geo.Cells, brightOut))
-
-	if eighths > 0 {
-		// The boundary at whole+1 cells (not geo.InputCells, which is
-		// clamped to whole) decides which zone the tip is entering. Always
-		// the plain shade — the tip is a length-smoothing artifact of the
-		// spring, not a second highlight.
-		nextInputCells := int(math.Round(inputFrac * float64(whole+1)))
-		if nextInputCells < 0 {
-			nextInputCells = 0
-		} else if nextInputCells > whole+1 {
-			nextInputCells = whole + 1
-		}
-		tipStyle := th.BarOutput
-		if whole < nextInputCells {
-			tipStyle = th.AccentPrimary
-		}
-		b.WriteString(tipStyle.Render(g.FracTips[eighths-1]))
-	}
 	return b.String()
 }
 
