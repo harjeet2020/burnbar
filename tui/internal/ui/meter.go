@@ -163,7 +163,7 @@ func (m Model) renderLabelRow(st core.ModelStat, selected bool, l layout) string
 		case bpWide:
 			secondary = core.FormatTokens(st.InputTokens) + " in" + g.Sep + core.FormatTokens(st.OutputTokens) + " out"
 		case bpStandard:
-			secondary = core.FormatTokens(st.InputTokens) + g.Arrow + core.FormatTokens(st.OutputTokens)
+			secondary = core.FormatTokens(st.TotalTokens())
 		}
 	}
 
