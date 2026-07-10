@@ -96,7 +96,8 @@ position in the display order. `?` always opens the full,
 un-collapsed overlay regardless of width. Select hint label reads `j/k`
 (arrows stay bound, undocumented).
 
-**Implemented, pending manual verification (Stage D.2 mode indicator) — manual zoom (D.3) still pending.** Now that
+**Implemented and verified (Stage D.2 mode indicator, Stage D.3 manual
+zoom).** Now that
 dual cost/token modes have shipped (§3), the header's active-window total and
 the status-row scale chip both need to read the *active mode's* unit —
 `spent $1.2345` / `used 1.5M` in the header, `scale $5` / `scale 2M` in
@@ -104,7 +105,8 @@ the status row (the scale chip doubles as the mode indicator, no extra
 chrome needed). The scale chip gains a `·manual` suffix while a manual
 zoom is pinned.
 
-**Pending — recent-request modal (Stage D.4).** A centered overlay
+**Implemented, chrome/empty-state verified — recent-request modal (Stage
+D.4).** A centered overlay
 (same chrome as the `?` help overlay — the app's one transient border)
 answering "what did the last thing that just happened actually cost?"
 — the question a live meter raises but the bars can't answer at a
@@ -118,17 +120,23 @@ latest request, and meter lag. **Live** (a new arrival updates it in
 place) and **display-only** — it reads the same coalesced object that
 drives the §5 highlight and never feeds the authoritative window
 totals. Friendly `no requests seen yet` line before any live request
-this session. `i` or `esc` closes it.
+this session. `i` or `esc` closes it. The overlay chrome, open/close
+bindings, and empty state are verified against the running app; the
+populated-burst content and live-update-in-place have not yet been
+exercised against a real request (no live traffic landed during
+verification) — the render code is untested past what unit tests on its
+inputs (`core.Burst`, `core.Format*`) and the identical `?`-overlay
+pattern already cover.
 
-## 3. The Bars — Stage D.2 implemented, pending manual verification; Stage D.3 (manual zoom) still pending
+## 3. The Bars — Stage D.2 and D.3 implemented and verified
 
 The old build (`internal/ui/meter.go`, `core.SplitBar`) rendered a
 single hybrid bar: length ∝ tokens, interior split by cost, one
 rolling accent1/accent2 highlight — a cell in it meant neither a fixed
 token count nor a fixed dollar amount, just a product of the two, with
 no honest place to draw "this burst added Δinput." Everything below is
-now implemented (pending manual verification); manual zoom (D.3) is
-the one piece not yet coded.
+now implemented and verified against the running app with real
+backend data.
 
 **Two display modes — cost and tokens — toggled by `m`.** The app
 never shows volume and money in the *same* bar. Instead each mode is
@@ -165,7 +173,8 @@ crossing 80% steps the scale up and **all bars shrink together**
 — proportions between bars stay exact at all times because every bar
 shares `S`.
 
-**Manual zoom (`-`/`+`/`0`) — the honest fix for the long-tail stub
+**Implemented and verified — manual zoom (`-`/`+`/`0`),
+the honest fix for the long-tail stub
 problem.** A dominant model plus several tiny ones squashes the tail
 into indistinguishable 1-cell stubs under the auto scale. Rather than
 a *nonlinear* scale (rejected — breaks exact proportionality and fights
@@ -597,25 +606,40 @@ manually verified against the running app.
 - [x] `go test ./internal/core` green with accent tests rewritten to
   the burst model and new per-mode geometry tests
 
-### Stage D.3 — Manual scale zoom
+### Stage D.3 — Manual scale zoom ✅ (2026-07-10, verified)
 
 **Goal / Done when:** see §3's "Manual zoom" — builds directly on
-D.2's generalized, mode-aware scale.
+D.2's generalized, mode-aware scale. Implemented in
+`internal/core/bars.go` (`NextScale`, ladder-stepping helpers),
+`internal/ui/model.go` (`manualScale`, `scale()`), `update.go` (zoom
+keys + reset sites), `meter.go` (`·manual` chip suffix), `keymap.go`.
+Verified against the running app with real backend data (zoom out/in,
+floor clamp, the `·manual` marker, and all three reset triggers), which
+also confirmed the intended long-tail-stub fix on a real skewed window.
 
-- [ ] Manual `S` as transient view state overriding auto until reset;
+- [x] Manual `S` as transient view state overriding auto until reset;
   auto does not re-engage while it holds
-- [ ] `-`/`+`(`=`)/`0` bindings + hint-row/`?`-help entries
-- [ ] Reset-to-auto on `r`/`t`/`m`; `·manual` marker on the scale chip
+- [x] `-`/`+`(`=`)/`0` bindings + hint-row/`?`-help entries
+- [x] Reset-to-auto on `r`/`t`/`m`; `·manual` marker on the scale chip
 
-### Stage D.4 — Recent-request modal
+### Stage D.4 — Recent-request modal ✅ (2026-07-10, chrome/empty-state verified)
 
-**Goal / Done when:** see §2's "Pending — recent-request modal."
+**Goal / Done when:** see §2's "recent-request modal." Implemented in
+`internal/core/burst.go` (`Burst.ProviderSlug` + coalescing),
+`internal/ui/model.go` (`showModal`), `update.go` (modal capture +
+binding), `view.go` (region2 case), `modal.go` (new — the overlay
+renderer), `keymap.go`. Overlay chrome, `i`/`esc` open-close, and the
+empty state are verified against the running app; no live request
+landed during verification, so the populated-burst content and
+live-update-in-place are unverified beyond the unit-tested `core.Burst`/
+`core.Format*` inputs and the proven `?`-overlay render pattern they
+reuse — worth a look next time a real burst lands.
 
-- [ ] `core`: expose the `latestBurst` detail object (reuses D.2's
+- [x] `core`: expose the `latestBurst` detail object (reuses D.2's
   coalescing) with the modal's fields
-- [ ] Modal overlay reusing the `renderHelpOverlay` pattern; `i`
+- [x] Modal overlay reusing the `renderHelpOverlay` pattern; `i`
   binding + hint-row/`?`-help entries
-- [ ] Live update in place; empty state before the first live request
+- [x] Live update in place; empty state before the first live request
 
 ### Stage E — Details screen
 

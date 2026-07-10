@@ -250,9 +250,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The recent-request modal captures everything else while open
+	// (tui/SPEC.md §2 Stage D.4), mirroring showHelp above.
+	if m.showModal {
+		if key.Matches(msg, k.Modal) || key.Matches(msg, k.Back) {
+			m.showModal = false
+		}
+		return m, nil
+	}
+
 	switch {
 	case key.Matches(msg, k.Help):
 		m.showHelp = true
+	case key.Matches(msg, k.Modal):
+		m.showModal = true
 	case key.Matches(msg, k.Timeframe):
 		// A window switch re-cuts the data → animate the new bar lengths.
 		return m.setTimeframe(m.tf.Next()).withAnim(nil)
@@ -262,9 +273,26 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.toggleSource()
 	case m.scr == screenMeter && key.Matches(msg, k.Mode):
 		// Mode toggle re-cuts what drives length/sort/scale → animate the
-		// new bar lengths, same as a window switch (tui/SPEC.md §3).
+		// new bar lengths, same as a window switch (tui/SPEC.md §3). It
+		// also re-baselines the view, so a pinned manual zoom resets.
 		m.mode = m.mode.Toggle()
+		m.manualScale = nil
 		return m.rebuilt(time.Now()).withAnim(nil)
+	case m.scr == screenMeter && key.Matches(msg, k.ZoomOut):
+		// `-` zooms out: next larger rung on the shared ladder (tui/SPEC.md
+		// §3 manual zoom, Stage D.3).
+		s := core.NextScale(m.scale(), 1, m.mode)
+		m.manualScale = &s
+		return m.withAnim(nil)
+	case m.scr == screenMeter && key.Matches(msg, k.ZoomIn):
+		// `+`/`=` zooms in: next smaller rung; bars over the new scale
+		// clamp to full width rather than the ladder re-expanding.
+		s := core.NextScale(m.scale(), -1, m.mode)
+		m.manualScale = &s
+		return m.withAnim(nil)
+	case m.scr == screenMeter && key.Matches(msg, k.ZoomReset):
+		m.manualScale = nil
+		return m.withAnim(nil)
 	case m.scr == screenMeter && key.Matches(msg, k.Up):
 		m = m.moveSelection(-1)
 	case m.scr == screenMeter && key.Matches(msg, k.Down):
@@ -281,19 +309,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // setTimeframe switches the window: pure client-side re-aggregation —
 // instant, no refetch (tui/SPEC.md §7). rebuilt handles the selection and
-// scroll repair for the new model list.
+// scroll repair for the new model list. A window switch re-baselines the
+// view, so a pinned manual zoom resets (tui/SPEC.md §3 Stage D.3).
 func (m Model) setTimeframe(tf core.Timeframe) Model {
 	m.tf = tf
+	m.manualScale = nil
 	return m.rebuilt(time.Now())
 }
 
 // refresh re-baselines the world (tui/SPEC.md §5/§7): drop all rows
 // (clearing the highlight, since LatestBurst has nothing left to find),
 // then refetch the baseline, today-slice, and credits. Stale data stays
-// on screen until the fresh data lands.
+// on screen until the fresh data lands. A manual zoom resets along with
+// everything else this re-baselines (tui/SPEC.md §3 Stage D.3).
 func (m Model) refresh() (tea.Model, tea.Cmd) {
 	m.rows.Clear()
 	m.accentEmphasisUntil = time.Time{}
+	m.manualScale = nil
 	m = m.rebuilt(time.Now())
 
 	cmds := []tea.Cmd{m.fetchBaselineCmd(), m.fetchTodaySliceCmd()}
@@ -390,6 +422,10 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = false
 		return m, nil
 	}
+	if m.showModal {
+		m.showModal = false
+		return m, nil
+	}
 
 	// Timeframe labels live on header row 2 (y=2, after the D.1 spacer row)
 	// on every screen.
@@ -425,7 +461,7 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // handleWheel scrolls the bars list when it is in scroll mode — the wheel
 // moves the viewport, not the selection (tui/SPEC.md §2).
 func (m Model) handleWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if m.scr != screenMeter || m.showHelp {
+	if m.scr != screenMeter || m.showHelp || m.showModal {
 		return m, nil
 	}
 	l := m.currentLayout()

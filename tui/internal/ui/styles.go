@@ -95,6 +95,9 @@ type Glyphs struct {
 	Arrow string
 	// Ellipsis marks truncation (… / ..).
 	Ellipsis string
+	// ManualMark badges the status-row scale chip while a manual zoom is
+	// pinned (tui/SPEC.md §3 Stage D.3): "·manual" / "*manual".
+	ManualMark string
 	// FracTips are the eighths-resolution partial block glyphs used for the
 	// spring-animated bar's leading tip (▏▎▍▌▋▊▉, indexed eighths-1 for
 	// eighths∈[1,7]); nil in ASCII mode, which stays cell-quantized
@@ -118,6 +121,7 @@ var unicodeGlyphs = Glyphs{
 	Sep:          " · ",
 	Arrow:        "→",
 	Ellipsis:     "…",
+	ManualMark:   "·manual",
 	FracTips:     []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"},
 }
 
@@ -137,6 +141,7 @@ var asciiGlyphs = Glyphs{
 	Sep:          " - ",
 	Arrow:        ">",
 	Ellipsis:     "..",
+	ManualMark:   "*manual",
 	// FracTips stays nil: ASCII mode has no fractional glyphs, an accepted
 	// degradation (tui/SPEC.md §6).
 }

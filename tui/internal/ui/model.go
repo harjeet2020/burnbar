@@ -75,6 +75,12 @@ type Model struct {
 	tf   core.Timeframe
 	mode core.Mode
 	snap core.Snapshot
+	// manualScale, when non-nil, pins the shared bar scale (tui/SPEC.md §3
+	// manual zoom, Stage D.3) instead of the auto-ranged core.ScaleFor
+	// result. Transient view state, not config: reset to nil on refresh,
+	// timeframe switch, and mode toggle. Auto-ranging does not re-engage
+	// while it holds, even if new data overflows it (bars just clamp).
+	manualScale *float64
 	// burst is the most recent coalesced live-request burst (tui/SPEC.md
 	// §5/§7), recomputed in rebuilt(); nil until the first live row of the
 	// session. Drives the single latest-burst highlight.
@@ -99,8 +105,9 @@ type Model struct {
 	// is in scroll mode.
 	scroll int
 
-	scr      screen
-	showHelp bool
+	scr       screen
+	showHelp  bool
+	showModal bool
 }
 
 // New assembles the initial model from a validated config: the render
@@ -234,8 +241,12 @@ func (m Model) selectedIndex() int {
 }
 
 // scale is the shared bar scale S for the current snapshot, in the active
-// mode's unit (tui/SPEC.md §3).
+// mode's unit (tui/SPEC.md §3). A pinned manualScale (Stage D.3) overrides
+// the auto-ranged result entirely.
 func (m Model) scale() float64 {
+	if m.manualScale != nil {
+		return *m.manualScale
+	}
 	var max float64
 	for _, st := range m.snap.Models {
 		if v := st.Value(m.mode); v > max {

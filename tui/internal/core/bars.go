@@ -25,26 +25,69 @@ const (
 // forever" guarantee, not a rendering one.
 const scaleMaxIterations = 300
 
+// ladderFloor returns the smallest allowed scale for mode (the ladder
+// floor, tune by feel per tui/SPEC.md §11).
+func ladderFloor(mode Mode) float64 {
+	if mode == ModeCost {
+		return scaleFloorCost
+	}
+	return float64(scaleFloorTokens)
+}
+
+// ladderRung returns the n-th rung of the 1–2–5 ladder anchored at floor
+// (n=0 is the floor itself): floor, 2×, 5×, 10×, 20×, 50×, 100×, ...
+func ladderRung(n int, floor float64) float64 {
+	if n <= 0 {
+		return floor
+	}
+	decade := n / 3
+	mult := []float64{1, 2, 5}[n%3]
+	return floor * math.Pow(10, float64(decade)) * mult
+}
+
 // ScaleFor returns the shared bar scale S: the smallest value from the
 // active mode's 1–2–5 ladder such that maxValue ≤ 0.8·S. It is a pure
 // function of the current window's data — no state, no hysteresis
 // (tui/SPEC.md §3).
 func ScaleFor(maxValue float64, mode Mode) float64 {
-	floor := float64(scaleFloorTokens)
-	if mode == ModeCost {
-		floor = scaleFloorCost
-	}
+	floor := ladderFloor(mode)
 	s := floor
-	// Walk the 1–2–5 ladder: ×2, ×2.5, ×2 repeating (10 → 20 → 50 → 100).
-	steps := []float64{2, 5, 10} // multipliers relative to the decade base
-	base := floor
-	for i := 0; maxValue > scaleHeadroom*s && i < scaleMaxIterations; i++ {
-		s = base * steps[i%3]
-		if i%3 == 2 {
-			base *= 10
-		}
+	for n := 1; maxValue > scaleHeadroom*s && n < scaleMaxIterations; n++ {
+		s = ladderRung(n, floor)
 	}
 	return s
+}
+
+// ladderIndex snaps value onto the nearest ladder rung ≥ it, returning that
+// rung's index. Robust to a current value that isn't exactly on the ladder
+// (callers always pass a prior ScaleFor/NextScale result in practice, but
+// this avoids float-equality fragility).
+func ladderIndex(value, floor float64) int {
+	if value <= floor {
+		return 0
+	}
+	const eps = 1e-9
+	for n := 0; n < scaleMaxIterations; n++ {
+		if value <= ladderRung(n, floor)*(1+eps) {
+			return n
+		}
+	}
+	return scaleMaxIterations - 1
+}
+
+// NextScale steps the shared 1–2–5 ladder by one rung from current (manual
+// zoom, tui/SPEC.md §3): direction > 0 zooms out (next larger rung, `-`
+// key); direction < 0 zooms in (next smaller rung, `+`/`=` key), floored at
+// the mode's ladder floor — it never returns below the floor. Bars whose
+// value then exceeds the returned scale simply clamp to full width via the
+// existing BarWidth clamp rather than the ladder re-expanding to fit them.
+func NextScale(current float64, direction int, mode Mode) float64 {
+	floor := ladderFloor(mode)
+	n := ladderIndex(current, floor) + direction
+	if n < 0 {
+		n = 0
+	}
+	return ladderRung(n, floor)
 }
 
 // BarWidth converts a value quantity into cells on the shared scale:

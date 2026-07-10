@@ -23,6 +23,12 @@ type Burst struct {
 	Model    string
 	Requests int
 
+	// ProviderSlug is the burst's routed provider (modal §2 Stage D.4) —
+	// set only when every included row reports the same slug; nil when
+	// unreported or the burst spans a mid-burst provider fallback, so the
+	// modal never claims more specificity than actually happened.
+	ProviderSlug *string
+
 	InputTokens, OutputTokens     int64
 	CachedTokens, ReasoningTokens *int64
 
@@ -103,10 +109,12 @@ func LatestBurst(rows []RequestRow) *Burst {
 	b := Burst{
 		Model:            newest.Model,
 		Requests:         len(included),
+		ProviderSlug:     included[0].ProviderSlug,
 		FirstRequestedAt: included[0].RequestedAt,
 		LastRequestedAt:  included[0].RequestedAt,
 		LastReceivedAt:   included[0].ReceivedAt,
 	}
+	slugConsistent := true
 	for _, r := range included {
 		b.InputTokens += r.InputTokens
 		b.OutputTokens += r.OutputTokens
@@ -115,6 +123,9 @@ func LatestBurst(rows []RequestRow) *Burst {
 		b.ReasoningTokens = addI64(b.ReasoningTokens, r.ReasoningTokens)
 		b.InputCost = addF64(b.InputCost, r.InputCostUSD)
 		b.OutputCost = addF64(b.OutputCost, r.OutputCostUSD)
+		if !sameProviderSlug(b.ProviderSlug, r.ProviderSlug) {
+			slugConsistent = false
+		}
 		if r.RequestedAt.Before(b.FirstRequestedAt) {
 			b.FirstRequestedAt = r.RequestedAt
 		}
@@ -122,5 +133,17 @@ func LatestBurst(rows []RequestRow) *Burst {
 			b.LastRequestedAt = r.RequestedAt
 		}
 	}
+	if !slugConsistent {
+		b.ProviderSlug = nil
+	}
 	return &b
+}
+
+// sameProviderSlug reports whether two possibly-nil provider slugs are the
+// same reported value; two unreported slugs (both nil) count as agreeing.
+func sameProviderSlug(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

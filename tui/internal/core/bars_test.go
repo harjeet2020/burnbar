@@ -74,6 +74,58 @@ func TestScaleForHugeInputTerminates(t *testing.T) {
 	}
 }
 
+func TestNextScale(t *testing.T) {
+	// Zoom out (direction +1) steps to the next larger rung; zoom in
+	// (direction -1) steps to the next smaller rung — reusing
+	// TestScaleForLadder's rung values (tui/SPEC.md §3 manual zoom).
+	tokenCases := []struct {
+		current   float64
+		direction int
+		want      float64
+	}{
+		{10_000, 1, 20_000},
+		{20_000, 1, 50_000},
+		{50_000, 1, 100_000},
+		{20_000, -1, 10_000},
+		{50_000, -1, 20_000},
+		{100_000, -1, 50_000},
+		// Floor clamp: zooming in at (or below) the floor stays at the floor.
+		{10_000, -1, 10_000},
+		{5_000, -1, 10_000},
+	}
+	for _, tt := range tokenCases {
+		if got := NextScale(tt.current, tt.direction, ModeTokens); got != tt.want {
+			t.Errorf("NextScale(%v, %v, ModeTokens) = %v, want %v", tt.current, tt.direction, got, tt.want)
+		}
+	}
+
+	costCases := []struct {
+		current   float64
+		direction int
+		want      float64
+	}{
+		{0.01, 1, 0.02},
+		{0.02, 1, 0.05},
+		{0.02, -1, 0.01},
+		{0.01, -1, 0.01}, // floor clamp
+	}
+	for _, tt := range costCases {
+		if got := NextScale(tt.current, tt.direction, ModeCost); got != tt.want {
+			t.Errorf("NextScale(%v, %v, ModeCost) = %v, want %v", tt.current, tt.direction, got, tt.want)
+		}
+	}
+
+	// Round trip: zooming out then back in returns to the starting rung.
+	for _, mode := range []Mode{ModeTokens, ModeCost} {
+		start := ladderFloor(mode) * 2
+		out := NextScale(start, 1, mode)
+		back := NextScale(out, -1, mode)
+		if back != start {
+			t.Errorf("round trip on %v: NextScale(NextScale(%v, 1), -1) = %v, want %v", mode, start, back, start)
+		}
+	}
+}
+
 func TestBarWidth(t *testing.T) {
 	tests := []struct {
 		name         string

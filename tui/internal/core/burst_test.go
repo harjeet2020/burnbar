@@ -154,6 +154,71 @@ func TestLatestBurstNullableSums(t *testing.T) {
 	}
 }
 
+func TestLatestBurstProviderSlugConsistentSetsSlug(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	r1 := req("t1", "s1", "m/a", 100, 10, 0.01, base, true)
+	r1.ReceivedAt = base.Add(1 * time.Second)
+	r1.ProviderSlug = str("novita/fp8")
+	r2 := req("t2", "s1", "m/a", 200, 20, 0.02, base.Add(time.Second), true)
+	r2.ReceivedAt = base.Add(2 * time.Second)
+	r2.ProviderSlug = str("novita/fp8")
+
+	b := LatestBurst([]RequestRow{r1, r2})
+	if b == nil {
+		t.Fatal("got nil, want a burst")
+	}
+	if b.ProviderSlug == nil || *b.ProviderSlug != "novita/fp8" {
+		t.Errorf("ProviderSlug = %v, want pointer to novita/fp8", b.ProviderSlug)
+	}
+}
+
+func TestLatestBurstProviderSlugMismatchOmits(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	r1 := req("t1", "s1", "m/a", 100, 10, 0.01, base, true)
+	r1.ReceivedAt = base.Add(1 * time.Second)
+	r1.ProviderSlug = str("novita/fp8")
+	r2 := req("t2", "s1", "m/a", 200, 20, 0.02, base.Add(time.Second), true)
+	r2.ReceivedAt = base.Add(2 * time.Second)
+	r2.ProviderSlug = str("together/bf16")
+
+	b := LatestBurst([]RequestRow{r1, r2})
+	if b == nil {
+		t.Fatal("got nil, want a burst")
+	}
+	if b.ProviderSlug != nil {
+		t.Errorf("ProviderSlug = %v, want nil (rows disagree on routed provider)", *b.ProviderSlug)
+	}
+}
+
+func TestLatestBurstProviderSlugUnreportedOmits(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	r1 := req("t1", "s1", "m/a", 100, 10, 0.01, base, true)
+	r1.ReceivedAt = base.Add(1 * time.Second)
+	r2 := req("t2", "s1", "m/a", 200, 20, 0.02, base.Add(time.Second), true)
+	r2.ReceivedAt = base.Add(2 * time.Second)
+
+	b := LatestBurst([]RequestRow{r1, r2})
+	if b == nil {
+		t.Fatal("got nil, want a burst")
+	}
+	if b.ProviderSlug != nil {
+		t.Errorf("ProviderSlug = %v, want nil (never reported)", *b.ProviderSlug)
+	}
+}
+
+func TestLatestBurstProviderSlugSingleRowUnreported(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	r := req("t1", "s1", "m/a", 100, 10, 0.01, base, true)
+
+	b := LatestBurst([]RequestRow{r})
+	if b == nil {
+		t.Fatal("got nil, want a burst")
+	}
+	if b.ProviderSlug != nil {
+		t.Errorf("ProviderSlug = %v, want nil (degenerate single-row, unreported)", *b.ProviderSlug)
+	}
+}
+
 func TestBurstInputOutputValue(t *testing.T) {
 	t.Run("token mode reads token sums directly", func(t *testing.T) {
 		b := Burst{InputTokens: 300, OutputTokens: 100}

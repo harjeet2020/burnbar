@@ -288,6 +288,9 @@ func (m Model) renderStatus(width int) string {
 	if m.mode == core.ModeTokens {
 		scale = "scale " + core.FormatTokens(int64(math.Round(scaleVal)))
 	}
+	if m.manualScale != nil {
+		scale += " " + g.ManualMark
+	}
 	source := "source " + m.sourceLabel()
 
 	lastFull, lastNoWord, lastCompact := "last request —", "last —", "last —"

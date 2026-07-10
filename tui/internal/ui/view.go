@@ -43,6 +43,8 @@ func (m Model) render() string {
 	switch {
 	case m.showHelp:
 		region2 = m.renderHelpOverlay(l)
+	case m.showModal:
+		region2 = m.renderRequestModal(l)
 	case m.scr == screenDetails:
 		region2 = m.renderDetails(l)
 	default:
