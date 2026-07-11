@@ -59,6 +59,19 @@ func fmtAvgDuration(ms *float64) string {
 	return core.FormatDuration(time.Duration(*ms * float64(time.Millisecond)))
 }
 
+// withPct appends a "(NN%)" annotation to a formatted in/out value — the
+// total·in(%)·out(%) idiom every token/cost row uses across both the
+// stats grid and the recent-request modal, except the effective-rate row
+// (a $/1M rate has no share-of-total to report). Skipped when pct is nil,
+// which only happens when the value itself is already "—", so a nil pct
+// never produces a dangling "(—)" beside a real number.
+func withPct(value string, pct *float64) string {
+	if pct == nil {
+		return value
+	}
+	return value + " (" + core.FormatPct(pct) + ")"
+}
+
 // statGridColumns builds the fixed stats-grid content for one model —
 // always the full triad values; renderStatsGrid decides per breakpoint
 // whether to show the split or collapse to total. left (4 rows) and right
@@ -74,11 +87,13 @@ func statGridColumns(st core.ModelStat) (left, right []statGridRow) {
 		{label: "cache hit", total: core.FormatPct(st.CacheHitPct())},
 		{label: "reasoning", total: core.FormatPct(st.ReasoningPct())},
 	}
+	inTokPct, outTokPct := st.InputTokensPct(), st.OutputTokensPct()
+	inCostPct, outCostPct := st.InputCostPct(), st.OutputCostPct()
 	right = []statGridRow{
-		{label: "cost", total: core.FormatCost(st.Cost), in: fmtCostPtr(st.InputCost), out: fmtCostPtr(st.OutputCost)},
-		{label: "tokens", total: core.FormatTokens(st.TotalTokens()), in: core.FormatTokens(st.InputTokens), out: core.FormatTokens(st.OutputTokens)},
-		{label: "avg cost/req", total: fmtCostPtr(st.AvgCost()), in: fmtCostPtr(st.AvgInputCost()), out: fmtCostPtr(st.AvgOutputCost())},
-		{label: "avg tokens/req", total: fmtAvgTokens(st.AvgTokens()), in: fmtAvgTokens(st.AvgInputTokens()), out: fmtAvgTokens(st.AvgOutputTokens())},
+		{label: "cost", total: core.FormatCost(st.Cost), in: withPct(fmtCostPtr(st.InputCost), inCostPct), out: withPct(fmtCostPtr(st.OutputCost), outCostPct)},
+		{label: "tokens", total: core.FormatTokens(st.TotalTokens()), in: withPct(core.FormatTokens(st.InputTokens), inTokPct), out: withPct(core.FormatTokens(st.OutputTokens), outTokPct)},
+		{label: "avg cost/req", total: fmtCostPtr(st.AvgCost()), in: withPct(fmtCostPtr(st.AvgInputCost()), inCostPct), out: withPct(fmtCostPtr(st.AvgOutputCost()), outCostPct)},
+		{label: "avg tokens/req", total: fmtAvgTokens(st.AvgTokens()), in: withPct(fmtAvgTokens(st.AvgInputTokens()), inTokPct), out: withPct(fmtAvgTokens(st.AvgOutputTokens()), outTokPct)},
 		{label: "eff. price/1M", total: core.FormatRate(st.EffectiveRate()), in: core.FormatRate(st.EffectiveInputRate()), out: core.FormatRate(st.EffectiveOutputRate())},
 	}
 	return left, right
@@ -121,20 +136,28 @@ func renderScalarRow(th Theme, g Glyphs, r statGridRow) string {
 	return " " + th.Muted.Render(r.label) + strings.Repeat(" ", pad) + th.Text.Render(r.total)
 }
 
-// renderTripleRow formats a label + total·in·out line, right-aligning
-// each of the three values into the shared totalW/inW/outW column widths
-// (tripleWidths) computed across all triad rows — the mini-table
-// structure that replaces the old ad hoc "$0.2851 - in $0.1695 - out
-// $0.0406" concatenation. showSplit=false (bpMini) renders total only,
-// still aligned to totalW.
-func renderTripleRow(th Theme, g Glyphs, r statGridRow, totalW, inW, outW int, showSplit bool) string {
-	if r.label == "" {
-		return ""
-	}
+// tripleValue formats a triad row's total (plus, when showSplit, the
+// in/out split) right-aligned into the shared totalW/inW/outW column
+// widths (tripleWidths) — the mini-table structure that replaces the old
+// ad hoc "$0.2851 - in $0.1695 - out $0.0406" concatenation. Split apart
+// from renderTripleRow so the recent-request modal (modal.go) can reuse
+// the exact same alignment for its triad rows even though it mixes them
+// into a single kv-style list rather than a two-column grid.
+func tripleValue(g Glyphs, r statGridRow, totalW, inW, outW int, showSplit bool) string {
 	value := padLeft(r.total, totalW)
 	if showSplit {
 		value += g.Sep + "in " + padLeft(r.in, inW) + g.Sep + "out " + padLeft(r.out, outW)
 	}
+	return value
+}
+
+// renderTripleRow formats a label + total·in·out line (tripleValue),
+// showSplit=false (bpMini) renders total only, still aligned to totalW.
+func renderTripleRow(th Theme, g Glyphs, r statGridRow, totalW, inW, outW int, showSplit bool) string {
+	if r.label == "" {
+		return ""
+	}
+	value := tripleValue(g, r, totalW, inW, outW, showSplit)
 	pad := 16 - lipgloss.Width(r.label)
 	if pad < 1 {
 		pad = 1

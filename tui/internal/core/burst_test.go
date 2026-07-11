@@ -39,7 +39,7 @@ func TestLatestBurstSingleRow(t *testing.T) {
 func TestLatestBurstChainsRowsWithinGap(t *testing.T) {
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 	// Three same-model live rows, each arrival 1s after the previous —
-	// well within burstGap (3s) — must coalesce into one burst.
+	// well within burstGap — must coalesce into one burst.
 	r1 := req("t1", "s1", "m/a", 100, 10, 0.01, base, true)
 	r1.ReceivedAt = base.Add(1 * time.Second)
 	r2 := req("t2", "s1", "m/a", 200, 20, 0.02, base.Add(time.Second), true)

@@ -11,8 +11,11 @@ import (
 )
 
 // burstGap is the max arrival gap between two live rows for them to be
-// considered part of the same burst. Tune by feel (tui/SPEC.md §11).
-const burstGap = 3 * time.Second
+// considered part of the same burst. Tune by feel (tui/SPEC.md §11) — 5s
+// gives a sequential agentic tool loop (each round's gap driven by that
+// round's tool latency) more room to stay coalesced than a single LLM
+// call's turnaround alone would need.
+const burstGap = 5 * time.Second
 
 // Burst is the most recent run of live rows for one model, coalesced for
 // display (tui/SPEC.md §5/§7). It is the single input to both the
@@ -73,6 +76,40 @@ func (b Burst) OutputValue(mode Mode) float64 {
 	}
 	return 0
 }
+
+// TotalTokens — see ModelStat.TotalTokens; the recent-request modal's
+// tokens row total (tui/SPEC.md §2 Stage D.4 refinement).
+func (b Burst) TotalTokens() int64 { return b.InputTokens + b.OutputTokens }
+
+// CacheHitPct — see ModelStat.CacheHitPct.
+func (b Burst) CacheHitPct() *float64 { return pctOf(b.CachedTokens, b.InputTokens) }
+
+// ReasoningPct — see ModelStat.ReasoningPct.
+func (b Burst) ReasoningPct() *float64 { return pctOf(b.ReasoningTokens, b.OutputTokens) }
+
+// EffectiveRate — see ModelStat.EffectiveRate.
+func (b Burst) EffectiveRate() *float64 {
+	cost := b.Cost
+	return ratePerMillion(&cost, b.TotalTokens())
+}
+
+// EffectiveInputRate — see ModelStat.EffectiveInputRate.
+func (b Burst) EffectiveInputRate() *float64 { return ratePerMillion(b.InputCost, b.InputTokens) }
+
+// EffectiveOutputRate — see ModelStat.EffectiveOutputRate.
+func (b Burst) EffectiveOutputRate() *float64 { return ratePerMillion(b.OutputCost, b.OutputTokens) }
+
+// InputTokensPct — see ModelStat.InputTokensPct.
+func (b Burst) InputTokensPct() *float64 { return tokenSharePct(b.InputTokens, b.TotalTokens()) }
+
+// OutputTokensPct — see ModelStat.InputTokensPct, output's share.
+func (b Burst) OutputTokensPct() *float64 { return tokenSharePct(b.OutputTokens, b.TotalTokens()) }
+
+// InputCostPct — see ModelStat.InputCostPct.
+func (b Burst) InputCostPct() *float64 { return pctOfFloat(b.InputCost, b.Cost) }
+
+// OutputCostPct — see ModelStat.InputCostPct, output's share.
+func (b Burst) OutputCostPct() *float64 { return pctOfFloat(b.OutputCost, b.Cost) }
 
 // LatestBurst coalesces the most recent live rows for one model into a
 // display-only Burst (tui/SPEC.md §7): starting from the newest live

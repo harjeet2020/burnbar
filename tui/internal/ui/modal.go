@@ -40,26 +40,24 @@ func (m Model) renderRequestModal(l layout) []string {
 	return strings.Split(placed, "\n")
 }
 
-// renderBurstLines formats the modal's body for a non-nil m.burst: model
-// (+ provider if reported), request count/span if >1, tokens, cost split,
-// wall time + age, and meter lag (tui/SPEC.md §2 Stage D.4).
+// renderBurstLines formats the modal's body for a non-nil m.burst, in the
+// order requests → tokens → cost → effective cost → cache hit →
+// reasoning → last request → meter lag (tui/SPEC.md §2 Stage D.4). The
+// tokens/cost/effective-cost rows share the same total·in(%)·out(%)
+// mini-table alignment as the details screen's stats grid (details.go's
+// tripleValue/tripleWidths), computed here over just these three rows
+// since the modal mixes them into one kv-style list rather than a
+// two-column grid.
 func (m Model) renderBurstLines(l layout) []string {
 	th, g := m.theme, m.glyphs
 	b := *m.burst
 
-	label := func(s string) string { return th.Muted.Render(s) }
 	kv := func(k, v string) string {
 		pad := 16 - lipgloss.Width(k)
 		if pad < 1 {
 			pad = 1
 		}
-		return label(k) + strings.Repeat(" ", pad) + th.Text.Render(v)
-	}
-	i64OrDash := func(v *int64) string {
-		if v == nil {
-			return "—"
-		}
-		return core.FormatTokens(*v)
+		return th.Muted.Render(k) + strings.Repeat(" ", pad) + th.Text.Render(v)
 	}
 
 	title := th.AccentPrimary.Bold(true).Render(truncateName(b.Model, l.contentW-1, g.Ellipsis))
@@ -70,34 +68,36 @@ func (m Model) renderBurstLines(l layout) []string {
 	var lines []string
 	lines = append(lines, title, "")
 
+	requests := fmt.Sprintf("%d", b.Requests)
 	if b.Requests > 1 {
 		span := core.FormatDuration(b.LastRequestedAt.Sub(b.FirstRequestedAt))
-		lines = append(lines, label(fmt.Sprintf("%d requests over %s", b.Requests, span)), "")
+		requests += " over " + span
 	}
 
-	lines = append(lines,
-		kv("input tokens", core.FormatTokens(b.InputTokens)),
-		kv("output tokens", core.FormatTokens(b.OutputTokens)),
-		kv("cached tokens", i64OrDash(b.CachedTokens)),
-		kv("reasoning tokens", i64OrDash(b.ReasoningTokens)),
-	)
-
-	costLine := core.FormatCost(b.Cost)
-	if b.InputCost != nil && b.OutputCost != nil {
-		costLine += g.Sep + "in " + core.FormatCost(*b.InputCost) + g.Sep + "out " + core.FormatCost(*b.OutputCost)
-	} else {
-		costLine += g.Sep + "in —" + g.Sep + "out —"
+	triad := []statGridRow{
+		{label: "tokens", total: core.FormatTokens(b.TotalTokens()), in: withPct(core.FormatTokens(b.InputTokens), b.InputTokensPct()), out: withPct(core.FormatTokens(b.OutputTokens), b.OutputTokensPct())},
+		{label: "cost", total: core.FormatCost(b.Cost), in: withPct(fmtCostPtr(b.InputCost), b.InputCostPct()), out: withPct(fmtCostPtr(b.OutputCost), b.OutputCostPct())},
+		{label: "eff. price/1M", total: core.FormatRate(b.EffectiveRate()), in: core.FormatRate(b.EffectiveInputRate()), out: core.FormatRate(b.EffectiveOutputRate())},
 	}
-	lines = append(lines, kv("cost", costLine))
+	totalW, inW, outW := tripleWidths(triad)
 
 	wallTime := core.FormatClock(b.LastRequestedAt) + " " + core.FormatRelative(time.Since(b.LastRequestedAt))
-	lines = append(lines, kv("last request", wallTime))
 
 	lag := "—"
 	if m.snap.LagSeconds != nil {
 		lag = core.FormatDuration(time.Duration(*m.snap.LagSeconds * float64(time.Second)))
 	}
-	lines = append(lines, kv("meter lag", lag))
+
+	lines = append(lines,
+		kv("requests", requests),
+		kv(triad[0].label, tripleValue(g, triad[0], totalW, inW, outW, true)),
+		kv(triad[1].label, tripleValue(g, triad[1], totalW, inW, outW, true)),
+		kv(triad[2].label, tripleValue(g, triad[2], totalW, inW, outW, true)),
+		kv("cache hit", core.FormatPct(b.CacheHitPct())),
+		kv("reasoning", core.FormatPct(b.ReasoningPct())),
+		kv("last request", wallTime),
+		kv("meter lag", lag),
+	)
 
 	return lines
 }

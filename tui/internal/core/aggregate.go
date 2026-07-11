@@ -277,6 +277,29 @@ func ratePerMillion(cost *float64, tokens int64) *float64 {
 	return &v
 }
 
+// pctOfFloat derives a percentage from a nullable numerator sum and a
+// float64 denominator (e.g. a split cost's share of the total cost); nil
+// numerator or zero denominator yields nil — the same "never fake a 0"
+// discipline pctOf enforces for int64 sums (tui/SPEC.md §2).
+func pctOfFloat(num *float64, den float64) *float64 {
+	if num == nil || den == 0 {
+		return nil
+	}
+	v := *num / den * 100
+	return &v
+}
+
+// tokenSharePct derives a percentage from two non-nullable int64s (e.g.
+// input tokens' share of total tokens) — unlike pctOf, the numerator here
+// is always reported, so only a zero denominator yields nil.
+func tokenSharePct(part, total int64) *float64 {
+	if total == 0 {
+		return nil
+	}
+	v := float64(part) / float64(total) * 100
+	return &v
+}
+
 // avgOf derives a mean from a nullable sum and its count.
 func avgOf(sum *int64, count int64) *float64 {
 	if sum == nil || count == 0 {
@@ -311,6 +334,21 @@ func (m ModelStat) EffectiveInputRate() *float64 { return ratePerMillion(m.Input
 func (m ModelStat) EffectiveOutputRate() *float64 {
 	return ratePerMillion(m.OutputCost, m.OutputTokens)
 }
+
+// InputTokensPct is InputTokens's share of TotalTokens, as a percentage —
+// the "(%)" annotation the stats grid appends beside every token row's in
+// value (tui/SPEC.md §2 Stage E refinement).
+func (m ModelStat) InputTokensPct() *float64 { return tokenSharePct(m.InputTokens, m.TotalTokens()) }
+
+// OutputTokensPct — see InputTokensPct, output's share.
+func (m ModelStat) OutputTokensPct() *float64 { return tokenSharePct(m.OutputTokens, m.TotalTokens()) }
+
+// InputCostPct is InputCost's share of Cost, as a percentage; nil when
+// InputCost was never reported or Cost is zero.
+func (m ModelStat) InputCostPct() *float64 { return pctOfFloat(m.InputCost, m.Cost) }
+
+// OutputCostPct — see InputCostPct, output's share.
+func (m ModelStat) OutputCostPct() *float64 { return pctOfFloat(m.OutputCost, m.Cost) }
 
 // AvgDurationMS is duration_ms_sum / timed_request_count (root SPEC §2).
 func (m ModelStat) AvgDurationMS() *float64 { return avgOf(m.DurationMSSum, m.TimedRequests) }
