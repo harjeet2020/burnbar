@@ -52,6 +52,12 @@ type Theme struct {
 	Selected lipgloss.Style
 	// OverlayBorder frames the expanded help overlay.
 	OverlayBorder lipgloss.Style
+	// TableRule is the details screen's provider-split table header/column
+	// rule (tui/SPEC.md §2 Stage E) — same muted weight as OverlayBorder,
+	// deliberately without a full box: OverlayBorder is reserved for the
+	// app's one transient overlay border (modal.go/overlay.go), so
+	// persistent in-content structure stays visually lighter.
+	TableRule lipgloss.Style
 }
 
 // DefaultTheme builds the ANSI-16 theme from tui/SPEC.md §5's token table.
@@ -73,6 +79,7 @@ func DefaultTheme() Theme {
 		StatusError:         lipgloss.NewStyle().Foreground(lipgloss.Red),
 		Selected:            lipgloss.NewStyle().Foreground(lipgloss.Cyan).Bold(true),
 		OverlayBorder:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.BrightBlack).Padding(0, 2),
+		TableRule:           lipgloss.NewStyle().Foreground(lipgloss.BrightBlack),
 	}
 }
 

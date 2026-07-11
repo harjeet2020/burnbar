@@ -28,6 +28,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// resize snaps, never animates (tui/SPEC.md §4).
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll = m.currentLayout().clampScroll(m.scroll)
+		m = m.clampDetailsScroll()
 		// Bars snap to the new width — a resize must feel like the terminal
 		// is in charge, never animated (tui/SPEC.md §4/§6).
 		m = m.snapBars()
@@ -298,9 +299,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.moveSelection(-1)
 	case m.scr == screenMeter && key.Matches(msg, k.Down):
 		m = m.moveSelection(1)
+	case m.scr == screenDetails && key.Matches(msg, k.Up):
+		m = m.scrollDetails(-1)
+	case m.scr == screenDetails && key.Matches(msg, k.Down):
+		m = m.scrollDetails(1)
 	case m.scr == screenMeter && key.Matches(msg, k.Details):
 		if m.selectedIndex() >= 0 {
 			m.scr = screenDetails
+			m.detailsScroll = 0
 		}
 	case m.scr == screenDetails && key.Matches(msg, k.Back):
 		m.scr = screenMeter
@@ -452,6 +458,7 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	name := m.snap.Models[idx].Name
 	if name == m.selected {
 		m.scr = screenDetails
+		m.detailsScroll = 0
 		return m, nil
 	}
 	m.selected = name
@@ -459,12 +466,24 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleWheel scrolls the bars list when it is in scroll mode — the wheel
-// moves the viewport, not the selection (tui/SPEC.md §2).
+// handleWheel dispatches the wheel to the focused screen's scroll
+// handler — the wheel moves the viewport, not the selection, on either
+// screen (tui/SPEC.md §2, §2 Stage E).
 func (m Model) handleWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if m.scr != screenMeter || m.showHelp || m.showModal {
+	if m.showHelp || m.showModal {
 		return m, nil
 	}
+	switch m.scr {
+	case screenMeter:
+		return m.handleMeterWheel(msg)
+	case screenDetails:
+		return m.handleDetailsWheel(msg)
+	}
+	return m, nil
+}
+
+// handleMeterWheel scrolls the bars list when it is in scroll mode.
+func (m Model) handleMeterWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	l := m.currentLayout()
 	if !l.scrolling {
 		return m, nil
@@ -476,4 +495,51 @@ func (m Model) handleWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 		m.scroll = l.clampScroll(m.scroll + 1)
 	}
 	return m, nil
+}
+
+// handleDetailsWheel scrolls the details screen's content viewport.
+func (m Model) handleDetailsWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		m = m.scrollDetails(-1)
+	case tea.MouseWheelDown:
+		m = m.scrollDetails(1)
+	}
+	return m, nil
+}
+
+// detailsViewport resolves the current selection's scroll window; ok is
+// false when nothing is selected (mirrors Model.selectedModel).
+func (m Model) detailsViewport(l layout) (detailsViewport, bool) {
+	st, ok := m.selectedModel()
+	if !ok {
+		return detailsViewport{}, false
+	}
+	return computeDetailsViewport(len(m.detailsContent(st, l)), l.listHeight), true
+}
+
+// scrollDetails moves the details screen's scroll offset by delta lines,
+// clamped to the current content's viewport.
+func (m Model) scrollDetails(delta int) Model {
+	l := m.currentLayout()
+	vp, ok := m.detailsViewport(l)
+	if !ok || !vp.scrolling {
+		return m
+	}
+	m.detailsScroll = vp.clampScroll(m.detailsScroll + delta)
+	return m
+}
+
+// clampDetailsScroll keeps detailsScroll valid for the current selection
+// and layout — the details-screen analog of layout.clampScroll for
+// Model.scroll.
+func (m Model) clampDetailsScroll() Model {
+	l := m.currentLayout()
+	vp, ok := m.detailsViewport(l)
+	if !ok {
+		m.detailsScroll = 0
+		return m
+	}
+	m.detailsScroll = vp.clampScroll(m.detailsScroll)
+	return m
 }

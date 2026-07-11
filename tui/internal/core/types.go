@@ -124,6 +124,11 @@ type ProviderStat struct {
 // (tui/SPEC.md §3).
 func (m ModelStat) TotalTokens() int64 { return m.InputTokens + m.OutputTokens }
 
+// TotalTokens — see ModelStat.TotalTokens. The details screen's provider
+// table shows this aggregated figure rather than the in/out split
+// (tui/SPEC.md §2 Stage E).
+func (p ProviderStat) TotalTokens() int64 { return p.InputTokens + p.OutputTokens }
+
 // Value returns the active mode's driving number — cost or total tokens —
 // the single place that decides what drives bar length, sort order, and
 // scale (tui/SPEC.md §3).

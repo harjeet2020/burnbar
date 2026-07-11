@@ -286,6 +286,17 @@ func avgOf(sum *int64, count int64) *float64 {
 	return &v
 }
 
+// avgF64 is avgOf for a nullable float64 sum (cost fields, unlike the
+// token/duration sums avgOf already covers) — nil when the sum was never
+// reported or count is zero.
+func avgF64(sum *float64, count int64) *float64 {
+	if sum == nil || count == 0 {
+		return nil
+	}
+	v := *sum / float64(count)
+	return &v
+}
+
 // CacheHitPct is cached/input as a percentage; nil when cached tokens
 // were never reported or no input tokens exist.
 func (m ModelStat) CacheHitPct() *float64 { return pctOf(m.CachedTokens, m.InputTokens) }
@@ -303,6 +314,44 @@ func (m ModelStat) EffectiveOutputRate() *float64 {
 
 // AvgDurationMS is duration_ms_sum / timed_request_count (root SPEC §2).
 func (m ModelStat) AvgDurationMS() *float64 { return avgOf(m.DurationMSSum, m.TimedRequests) }
+
+// AvgCost is the mean cost per request; nil when Requests is zero
+// (tui/SPEC.md §2 Stage E).
+func (m ModelStat) AvgCost() *float64 { cost := m.Cost; return avgF64(&cost, m.Requests) }
+
+// AvgInputCost — see AvgCost; nil when InputCost was never reported.
+func (m ModelStat) AvgInputCost() *float64 { return avgF64(m.InputCost, m.Requests) }
+
+// AvgOutputCost — see AvgCost; nil when OutputCost was never reported.
+func (m ModelStat) AvgOutputCost() *float64 { return avgF64(m.OutputCost, m.Requests) }
+
+// AvgTokens is the mean total (input+output) tokens per request; nil when
+// Requests is zero.
+func (m ModelStat) AvgTokens() *float64 {
+	total := m.TotalTokens()
+	return avgOf(&total, m.Requests)
+}
+
+// AvgInputTokens — see AvgTokens, input tokens only.
+func (m ModelStat) AvgInputTokens() *float64 {
+	v := m.InputTokens
+	return avgOf(&v, m.Requests)
+}
+
+// AvgOutputTokens — see AvgTokens, output tokens only.
+func (m ModelStat) AvgOutputTokens() *float64 {
+	v := m.OutputTokens
+	return avgOf(&v, m.Requests)
+}
+
+// EffectiveRate is the blended realized $/1M tokens across both input and
+// output — cost/(input+output tokens)×1e6; nil when total tokens is zero.
+// Complements EffectiveInputRate/EffectiveOutputRate, which only cover
+// each side individually (tui/SPEC.md §2 Stage E).
+func (m ModelStat) EffectiveRate() *float64 {
+	cost := m.Cost
+	return ratePerMillion(&cost, m.TotalTokens())
+}
 
 // CacheHitPct — see ModelStat.CacheHitPct.
 func (p ProviderStat) CacheHitPct() *float64 { return pctOf(p.CachedTokens, p.InputTokens) }
@@ -331,4 +380,37 @@ func (p ProviderStat) SharePct(modelCost float64) *float64 {
 	}
 	v := p.Cost / modelCost * 100
 	return &v
+}
+
+// AvgCost — see ModelStat.AvgCost.
+func (p ProviderStat) AvgCost() *float64 { cost := p.Cost; return avgF64(&cost, p.Requests) }
+
+// AvgInputCost — see ModelStat.AvgInputCost.
+func (p ProviderStat) AvgInputCost() *float64 { return avgF64(p.InputCost, p.Requests) }
+
+// AvgOutputCost — see ModelStat.AvgOutputCost.
+func (p ProviderStat) AvgOutputCost() *float64 { return avgF64(p.OutputCost, p.Requests) }
+
+// AvgTokens — see ModelStat.AvgTokens.
+func (p ProviderStat) AvgTokens() *float64 {
+	total := p.TotalTokens()
+	return avgOf(&total, p.Requests)
+}
+
+// AvgInputTokens — see ModelStat.AvgInputTokens.
+func (p ProviderStat) AvgInputTokens() *float64 {
+	v := p.InputTokens
+	return avgOf(&v, p.Requests)
+}
+
+// AvgOutputTokens — see ModelStat.AvgOutputTokens.
+func (p ProviderStat) AvgOutputTokens() *float64 {
+	v := p.OutputTokens
+	return avgOf(&v, p.Requests)
+}
+
+// EffectiveRate — see ModelStat.EffectiveRate.
+func (p ProviderStat) EffectiveRate() *float64 {
+	cost := p.Cost
+	return ratePerMillion(&cost, p.TotalTokens())
 }

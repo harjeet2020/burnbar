@@ -61,14 +61,50 @@ help · `q`/`ctrl+c` quit. Mouse is a pure augmentation (wheel scroll,
 click-select, click-through to details, timeframe click) — every
 action has a keyboard equivalent, never required.
 
-**Details screen** (`internal/ui/details.go`) is a full-screen
-drill-down replacing the bars region for the selected model over the
-active window (header/status/hints persist, hints swap to `esc back ·
-t window · r refresh · q quit`): totals (requests, tokens, cost
-w/split), cache hit %, reasoning share, effective $/1M rates, avg
-duration, and a `lipgloss/table` provider-split table sorted by cost
-desc. `—` for NULL-derived values, never 0. Stays live; selection
-follows the *model* across re-sorts.
+**Implemented (Stage E, 2026-07-10; refined 2026-07-10).** Details screen
+(`internal/ui/details.go`) is a full-screen drill-down replacing the
+bars region for the selected model over the active window
+(header/status/hints persist, hints swap to `esc back · j/k scroll ·
+t window · r refresh · p source · q quit`, collapsing by the same
+priority rules as the main screen): a stats grid (requests, avg
+duration, cache hit %, reasoning share — 4 rows — plus cost/tokens/avg
+cost-per-request/avg tokens-per-request/effective $/1M rate, 5 rows,
+each as a total·in·out triad) and a provider-split table sorted cost
+desc. Both respond to the width ladder (§4) — two columns down to one,
+full triads down to total-only — and the whole region scrolls as one
+flat unit (`▲/▼ N more`) when content outgrows the available height.
+`—` for NULL-derived values, never 0. Stays live; selection follows
+the *model* across re-sorts.
+
+The refinement pass (post-review against the running app) reworked
+presentation without touching any of the above data: the whole block
+(grid + table) renders at its own natural width, capped at
+`detailsMaxW` (96 cells, tuned by feel) rather than stretching to fill
+the terminal, and is centered in whatever room is left — the same
+`lipgloss.Place` idea the too-small message and the transient overlays
+already used. The grid's right column (the 5 triad rows) is a real
+mini-table now: each of total/in/out right-aligns into a column width
+shared across all 5 rows, so a dollar amount and a bare token count
+line up on the same right edge instead of the old ad hoc
+`$0.2851 · in $0.1695 · out $0.0406` concatenation; the left column no
+longer carries a blank divider row (it's genuinely 4 rows, the right
+5 — a normal unequal-column layout, not a gap). The provider table
+drops its breakpoint-tied column set for a self-measuring one: it
+tries 8 columns down to the required 4 (PROVIDER/REQ/COST/SHARE),
+re-measuring its own natural rendered width at each step, and uses the
+widest set that fits under the cap — so it sheds one column at a time
+as width tightens (previously three dropped at once) and never
+stretches padding to fill unused space. Add-back priority beyond the
+core 4: TOKENS, then AVG DUR, then IN $/1M, then OUT $/1M. When even
+the core 4 don't fit, the display falls back to a per-provider stacked
+list — now showing all 8 stats as rows (previously only 4), since
+scrolling is cheap and losing data isn't; the fallback threshold is
+whatever width the actual data needs, not a fixed column count, so it
+no longer triggers as eagerly as the old fixed `<60`-cell cutoff did.
+Effective-rate values ($/1M figures, both here and in the provider
+table's `IN $/1M`/`OUT $/1M` columns) drop the repeated `/1M` suffix
+— the unit lives in the row/column label once, not on every number
+(`core.FormatRate`).
 
 ---
 
@@ -779,20 +815,16 @@ live request" note.
 - [x] `fadeRampFrames` 3 → 6; `renderFadingBar`'s glyph index scaled so
   the fixed 3-glyph `░▒▓` ramp still spans the doubled frame count
 
-### Stage E — Details screen
+### Stage E — Details screen ✅ (2026-07-10, verified)
 
 **Goal:** the follow-up question the main screen deliberately raises —
 "where exactly is this model's money going?" — answered with the
-per-model breakdown the raw rows already carry.
-
-**Done when:** enter/click-through on any model opens its details
-screen, every §2 stat renders correctly (`—` for NULL-derived, never
-0), the provider split table is cost-sorted, live events update an
-open details screen in place.
-
-- [ ] Drill-down navigation (selection ↔ details, live updates in place)
-- [ ] Stats grid + provider split table per §2, `—` for NULL-derived
-  values
+per-model breakdown the raw rows already carry. See §2 for the shipped
+shape; `internal/ui/details.go` (rendering), `internal/core/aggregate.go`
++ `format.go` (the derived stats/formatters feeding it) are the key
+files. Verified manually via VHS screenshots against the real backend
+across the full width ladder (§4), the height floor with scroll
+engaged, and ASCII-mode fallback.
 
 ### Stage E.1 — Live theme picker (ANSI-16 remap)
 

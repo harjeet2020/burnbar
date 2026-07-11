@@ -121,3 +121,24 @@ func FormatRelative(d time.Duration) string {
 // FormatClock renders a local wall-clock timestamp, HH:MM:SS
 // (tui/SPEC.md §9).
 func FormatClock(t time.Time) string { return t.Local().Format("15:04:05") }
+
+// FormatPct renders a percentage rounded to whole points ("62%"); nil
+// (never reported, or the ratio's denominator was zero) renders "—"
+// (tui/SPEC.md §2 Stage E).
+func FormatPct(p *float64) string {
+	if p == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f%%", *p)
+}
+
+// FormatRate renders a realized $/1M-token rate value, reusing FormatCost's
+// adaptive precision ("$3.10"); nil renders "—" (tui/SPEC.md §2 Stage E).
+// The "/1M" unit lives in whichever row/column label accompanies the
+// value, not the value itself, so it isn't repeated on every number.
+func FormatRate(r *float64) string {
+	if r == nil {
+		return "—"
+	}
+	return FormatCost(*r)
+}

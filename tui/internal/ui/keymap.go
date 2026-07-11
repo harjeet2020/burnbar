@@ -33,9 +33,13 @@ type KeyMap struct {
 	// "j/k select" entry the hint row shows (the real bindings stay
 	// separate for dispatch). zoomHint similarly folds the three zoom
 	// bindings into one "-/+/0 zoom" hint-row entry (tui/SPEC.md §3 Stage
-	// D.3); each key still dispatches through its own binding.
+	// D.3); each key still dispatches through its own binding. scrollHint
+	// folds the same up/down/k/j keys into "j/k scroll" for the details
+	// screen, where they drive the content viewport instead of selection
+	// (tui/SPEC.md §2 Stage E).
 	selectHint key.Binding
 	zoomHint   key.Binding
+	scrollHint key.Binding
 }
 
 // newKeyMap builds the bindings. The select hint label is always "j/k"
@@ -109,6 +113,10 @@ func newKeyMap() KeyMap {
 			key.WithKeys("-", "+", "=", "0"),
 			key.WithHelp("-/+/0", "zoom"),
 		),
+		scrollHint: key.NewBinding(
+			key.WithKeys("up", "down", "k", "j"),
+			key.WithHelp("j/k", "scroll"),
+		),
 	}
 }
 
@@ -154,15 +162,17 @@ func (k KeyMap) MeterHints() []hintEntry {
 }
 
 // DetailsHints is the details-screen equivalent of MeterHints: back and
-// quit are always shown; source drops first, then refresh, then window
-// last — unchanged from the pre-existing behavior, just expressed in the
-// same rank form as MeterHints.
+// quit are always shown. scroll drops first — it only matters on short
+// terminals where the content overflows, unlike source/refresh/window
+// which matter at every height (tui/SPEC.md §2 Stage E) — then source,
+// then refresh, then window last.
 func (k KeyMap) DetailsHints() []hintEntry {
 	return []hintEntry{
 		{k.Back, hintCore},
-		{k.Timeframe, 3},
-		{k.Refresh, 2},
-		{k.ToggleSource, 1},
+		{k.scrollHint, 1},
+		{k.Timeframe, 4},
+		{k.Refresh, 3},
+		{k.ToggleSource, 2},
 		{k.Quit, hintCore},
 	}
 }

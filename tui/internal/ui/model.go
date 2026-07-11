@@ -107,6 +107,11 @@ type Model struct {
 	// scroll is the index of the first visible model block when the list
 	// is in scroll mode.
 	scroll int
+	// detailsScroll is the line-index scroll offset for the details
+	// screen's flat content list (computeDetailsViewport) — independent
+	// of scroll, the bars list's block-indexed offset (tui/SPEC.md §2
+	// Stage E).
+	detailsScroll int
 
 	scr       screen
 	showHelp  bool
@@ -228,6 +233,7 @@ func (m Model) rebuilt(now time.Time) Model {
 		}
 	}
 	m.scroll = m.currentLayout().clampScroll(m.scroll)
+	m = m.clampDetailsScroll()
 	m = m.reconcileAnim()
 	return m.ensureSelectionVisible()
 }
@@ -241,6 +247,17 @@ func (m Model) selectedIndex() int {
 		}
 	}
 	return -1
+}
+
+// selectedModel resolves the current selection to its ModelStat; ok is
+// false when nothing is selected or the selection isn't in this window
+// (tui/SPEC.md §2 Stage E).
+func (m Model) selectedModel() (core.ModelStat, bool) {
+	idx := m.selectedIndex()
+	if idx < 0 {
+		return core.ModelStat{}, false
+	}
+	return m.snap.Models[idx], true
 }
 
 // scale is the shared bar scale S for the current snapshot, in the active
