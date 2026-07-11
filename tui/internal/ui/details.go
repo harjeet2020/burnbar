@@ -463,15 +463,16 @@ func (m Model) renderDetails(l layout) []string {
 		return padRows([]string{"", " " + th.Muted.Render("nothing selected")}, l.listHeight)
 	}
 	lines := m.detailsContent(st, l)
-	vp := computeDetailsViewport(len(lines), l.listHeight)
+	vp := computeViewport(len(lines), l.listHeight)
 	scroll := vp.clampScroll(m.detailsScroll)
-	return renderDetailsViewport(lines, vp, scroll, l.listHeight, m.theme, m.glyphs)
+	return renderViewport(lines, vp, scroll, l.listHeight, m.theme, m.glyphs)
 }
 
-// renderDetailsViewport windows a flat line list to exactly listHeight
-// rows, reusing the bars list's "N more" idiom (Glyphs.MoreUp/MoreDown)
-// line-indexed instead of block-indexed.
-func renderDetailsViewport(lines []string, vp detailsViewport, scroll, listHeight int, th Theme, g Glyphs) []string {
+// renderViewport windows a flat line list to exactly listHeight rows,
+// reusing the bars list's "N more" idiom (Glyphs.MoreUp/MoreDown)
+// line-indexed instead of block-indexed. Shared by the details and theme
+// screens (tui/SPEC.md §2 Stage E, §5 Stage E.1).
+func renderViewport(lines []string, vp viewport, scroll, listHeight int, th Theme, g Glyphs) []string {
 	if !vp.scrolling {
 		return padRows(lines, listHeight)
 	}

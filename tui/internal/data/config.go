@@ -42,6 +42,12 @@ type Config struct {
 	// LiveSource selects the live event mechanism: "realtime" (default) or
 	// "poll".
 	LiveSource string `toml:"live_source"`
+	// Colors is the optional [colors] table (Stage E.1 live theme picker,
+	// tui/SPEC.md §5/§7) — raw, unvalidated strings; the ui package
+	// resolves them into ANSI-16 colors, falling back to defaults per
+	// token rather than failing validation, since a hand-typo'd or
+	// missing color is never a reason to refuse to start.
+	Colors ColorsConfig `toml:"colors"`
 }
 
 // HasCredentialsForCredits reports whether the credits endpoint can be

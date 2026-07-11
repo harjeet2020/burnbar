@@ -47,6 +47,8 @@ func (m Model) render() string {
 		region2 = m.renderRequestModal(l)
 	case m.scr == screenDetails:
 		region2 = m.renderDetails(l)
+	case m.scr == screenTheme:
+		region2 = m.renderTheme(l)
 	default:
 		region2 = m.renderBars(l)
 	}

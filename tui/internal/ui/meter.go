@@ -219,7 +219,14 @@ func (m Model) renderBarRow(st core.ModelStat, scale float64, l layout) string {
 // stays solid for the whole fade (an accepted degradation, matching
 // FracTips's existing ASCII fallback).
 func (m Model) renderFadingBar(a *barAnim, whole, eighths int) string {
-	th, g := m.theme, m.glyphs
+	return renderFadingBarStyled(m.theme, m.glyphs, a, whole, eighths)
+}
+
+// renderFadingBarStyled is renderFadingBar's pure body, factored out
+// (Stage E.1) so the theme picker's preview can call it directly against a
+// draft palette instead of the live m.theme — the exact same bar-drawing
+// code path, not a reimplementation.
+func renderFadingBarStyled(th Theme, g Glyphs, a *barAnim, whole, eighths int) string {
 	if whole == 0 && eighths == 0 {
 		return ""
 	}
@@ -251,17 +258,27 @@ func (m Model) renderFadingBar(a *barAnim, whole, eighths int) string {
 // bar's spring and fade have both fully settled, so target is always the
 // final, non-moving width.
 func (m Model) renderResolvedBar(st core.ModelStat, target int) string {
-	th, g := m.theme, m.glyphs
-
-	inputFrac := core.SplitFraction(st, m.mode)
-	var brightInputFrac, brightOutputFrac float64
+	var burstInput, burstOutput float64
 	if m.burst != nil && m.burst.Model == st.Name {
 		if denom := st.Value(m.mode); denom > 0 {
-			brightInputFrac = m.burst.InputValue(m.mode) / denom
-			brightOutputFrac = m.burst.OutputValue(m.mode) / denom
+			burstInput = m.burst.InputValue(m.mode) / denom
+			burstOutput = m.burst.OutputValue(m.mode) / denom
 		}
 	}
-	geo := core.SplitBar(target, inputFrac, brightInputFrac, brightOutputFrac)
+	pulsing := m.burst != nil && m.burst.Model == st.Name && time.Now().Before(m.accentEmphasisUntil)
+	return renderResolvedBarStyled(m.theme, m.glyphs, st, target, m.mode, burstInput, burstOutput, pulsing)
+}
+
+// renderResolvedBarStyled is renderResolvedBar's pure body, factored out
+// (Stage E.1) so the theme picker's preview can call it directly against a
+// draft palette and a synthetic burst share — the exact same bar-drawing
+// code path (glyph selection, cell-run styling, bright-region math), not a
+// reimplementation. burstInputFrac/burstOutputFrac are the already-resolved
+// shares (renderResolvedBar computes these from m.burst; the preview
+// supplies them directly, since it has no real burst to derive from).
+func renderResolvedBarStyled(th Theme, g Glyphs, st core.ModelStat, target int, mode core.Mode, burstInputFrac, burstOutputFrac float64, pulsing bool) string {
+	inputFrac := core.SplitFraction(st, mode)
+	geo := core.SplitBar(target, inputFrac, burstInputFrac, burstOutputFrac)
 	if geo.Cells == 0 {
 		return ""
 	}
@@ -288,7 +305,6 @@ func (m Model) renderResolvedBar(st core.ModelStat, target int) string {
 
 	// A freshly-arrived burst renders bold for accentEmphasis — the arrival
 	// signal, and the only way a sub-cell tiny request is seen (§6).
-	pulsing := m.burst != nil && m.burst.Model == st.Name && time.Now().Before(m.accentEmphasisUntil)
 	brightIn, brightOut := th.AccentPrimaryBright, th.BarOutputBright
 	if pulsing {
 		brightIn, brightOut = brightIn.Bold(true), brightOut.Bold(true)
@@ -299,7 +315,7 @@ func (m Model) renderResolvedBar(st core.ModelStat, target int) string {
 
 	var b strings.Builder
 	b.WriteString(" ")
-	b.WriteString(run(0, plainInputEnd, th.AccentPrimary))
+	b.WriteString(run(0, plainInputEnd, th.BarInput))
 	b.WriteString(run(plainInputEnd, geo.InputCells, brightIn))
 	b.WriteString(run(geo.InputCells, plainOutputEnd, th.BarOutput))
 	b.WriteString(run(plainOutputEnd, geo.Cells, brightOut))
@@ -395,8 +411,11 @@ func (m Model) renderConn() string {
 // order (tui/SPEC.md §2/§4).
 func (m Model) renderHints(l layout) string {
 	entries := m.keys.MeterHints()
-	if m.scr == screenDetails {
+	switch m.scr {
+	case screenDetails:
 		entries = m.keys.DetailsHints()
+	case screenTheme:
+		entries = m.keys.ThemeHints()
 	}
 	return " " + renderPriorityHints(m.theme, m.glyphs.Sep, m.width-1, entries)
 }

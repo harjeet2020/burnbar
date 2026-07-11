@@ -94,3 +94,9 @@ type animTickMsg struct{}
 // It carries nothing — its arrival simply forces a redraw so the emphasis
 // drops even when the bar animation has already settled (tui/SPEC.md §6).
 type emphasisEndMsg struct{}
+
+// themeSavedMsg reports the outcome of a theme-picker save (tui/SPEC.md §5
+// Stage E.1, saveThemeCmd) — err is nil on success.
+type themeSavedMsg struct {
+	err error
+}

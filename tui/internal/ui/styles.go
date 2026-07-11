@@ -17,8 +17,13 @@ import (
 // Code refers to tokens, never to colors, so a future theme file (or a
 // colorblind variant) is a data change, not a code change.
 type Theme struct {
-	// AccentPrimary: wordmark, active timeframe, selection, input segment.
+	// AccentPrimary: wordmark, active timeframe, selection — text
+	// highlights only. The bar's input segment has its own BarInput token
+	// (Stage E.1 split these apart so remapping one never silently
+	// repaints the other).
 	AccentPrimary lipgloss.Style
+	// BarInput: the input segment (paired with the █ glyph difference).
+	BarInput lipgloss.Style
 	// BarOutput: the output segment (paired with the ▒ glyph difference).
 	BarOutput lipgloss.Style
 	// AccentPrimaryBright: the latest burst's input share — a brighter
@@ -30,10 +35,8 @@ type Theme struct {
 	BarOutputBright lipgloss.Style
 	// FadeColor: the flat ANSI-16 color for a bar's whole interior while
 	// its length animation is in flight (tui/SPEC.md §6 fade) — no real
-	// segment/highlight color is computed until the bar is at rest.
-	// Provisional hardcoded ANSI Yellow; intended to become a configurable
-	// token under the not-yet-built Stage E.1 live theme picker (§5)
-	// alongside the other tokens.
+	// segment/highlight color is computed until the bar is at rest. The
+	// bar.transition token (Stage E.1).
 	FadeColor lipgloss.Style
 	// Text: primary foreground for names and values.
 	Text lipgloss.Style
@@ -60,28 +63,40 @@ type Theme struct {
 	TableRule lipgloss.Style
 }
 
-// DefaultTheme builds the ANSI-16 theme from tui/SPEC.md §5's token table.
-func DefaultTheme() Theme {
-	muted := lipgloss.NewStyle().Foreground(lipgloss.BrightBlack)
+// buildTheme constructs a full Theme from a resolved palette (Stage E.1's
+// themeColors, internal/ui/colors.go) — the single place every derived
+// field is assembled, so TimeframeActive/Selected always cascade from the
+// same accent color as everything else the "accent" token claims to
+// control (tui/SPEC.md §5's token table), and TimeframeInactive always
+// matches Muted, exactly as before.
+func buildTheme(c themeColors) Theme {
+	accent := lipgloss.NewStyle().Foreground(c.Accent.lipgloss())
+	muted := lipgloss.NewStyle().Foreground(c.TextMuted.lipgloss())
 	return Theme{
-		AccentPrimary:       lipgloss.NewStyle().Foreground(lipgloss.Cyan),
-		BarOutput:           lipgloss.NewStyle().Foreground(lipgloss.Blue),
-		AccentPrimaryBright: lipgloss.NewStyle().Foreground(lipgloss.BrightCyan),
-		BarOutputBright:     lipgloss.NewStyle().Foreground(lipgloss.BrightBlue),
-		FadeColor:           lipgloss.NewStyle().Foreground(lipgloss.Yellow),
-		Text:                lipgloss.NewStyle(),
+		AccentPrimary:       accent,
+		BarInput:            lipgloss.NewStyle().Foreground(c.BarInput.lipgloss()),
+		BarOutput:           lipgloss.NewStyle().Foreground(c.BarOutput.lipgloss()),
+		AccentPrimaryBright: lipgloss.NewStyle().Foreground(c.BarInputBright.lipgloss()),
+		BarOutputBright:     lipgloss.NewStyle().Foreground(c.BarOutputBright.lipgloss()),
+		FadeColor:           lipgloss.NewStyle().Foreground(c.BarTransition.lipgloss()),
+		Text:                lipgloss.NewStyle().Foreground(c.TextPrimary.lipgloss()),
 		Muted:               muted,
 		Value:               lipgloss.NewStyle().Bold(true),
-		TimeframeActive:     lipgloss.NewStyle().Foreground(lipgloss.Cyan).Reverse(true),
+		TimeframeActive:     accent.Reverse(true),
 		TimeframeInactive:   muted,
 		StatusOK:            lipgloss.NewStyle().Foreground(lipgloss.Green),
 		StatusWarn:          lipgloss.NewStyle().Foreground(lipgloss.Yellow),
 		StatusError:         lipgloss.NewStyle().Foreground(lipgloss.Red),
-		Selected:            lipgloss.NewStyle().Foreground(lipgloss.Cyan).Bold(true),
+		Selected:            accent.Bold(true),
 		OverlayBorder:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.BrightBlack).Padding(0, 2),
 		TableRule:           lipgloss.NewStyle().Foreground(lipgloss.BrightBlack),
 	}
 }
+
+// DefaultTheme builds the ANSI-16 theme from tui/SPEC.md §5's token table's
+// built-in defaults — unchanged signature/behavior for existing callers
+// (e.g. hints_test.go) that just want a theme without a config round-trip.
+func DefaultTheme() Theme { return buildTheme(defaultThemeColors()) }
 
 // Glyphs is the drawing character set. Every glyph has an ASCII fallback
 // (tui/SPEC.md §5) selected once at startup — no Nerd Font anywhere.

@@ -29,6 +29,16 @@ type KeyMap struct {
 	Quit         key.Binding
 	Suspend      key.Binding
 
+	// Theme opens the live color picker (tui/SPEC.md §5 Stage E.1);
+	// ThemeCycleLeft/Right, ThemeToggleBright, ThemeReset, and ThemeSave
+	// only ever dispatch while screenTheme is active (update.go).
+	Theme             key.Binding
+	ThemeCycleLeft    key.Binding
+	ThemeCycleRight   key.Binding
+	ThemeToggleBright key.Binding
+	ThemeReset        key.Binding
+	ThemeSave         key.Binding
+
 	// selectHint is display-only: it folds Up+Down into the single
 	// "j/k select" entry the hint row shows (the real bindings stay
 	// separate for dispatch). zoomHint similarly folds the three zoom
@@ -36,10 +46,13 @@ type KeyMap struct {
 	// D.3); each key still dispatches through its own binding. scrollHint
 	// folds the same up/down/k/j keys into "j/k scroll" for the details
 	// screen, where they drive the content viewport instead of selection
-	// (tui/SPEC.md §2 Stage E).
-	selectHint key.Binding
-	zoomHint   key.Binding
-	scrollHint key.Binding
+	// (tui/SPEC.md §2 Stage E). themeRowHint/themeCycleHint are the same
+	// idiom for the theme screen's row-move and color-cycle bindings.
+	selectHint     key.Binding
+	zoomHint       key.Binding
+	scrollHint     key.Binding
+	themeRowHint   key.Binding
+	themeCycleHint key.Binding
 }
 
 // newKeyMap builds the bindings. The select hint label is always "j/k"
@@ -105,6 +118,30 @@ func newKeyMap() KeyMap {
 		Suspend: key.NewBinding(
 			key.WithKeys("ctrl+z"),
 		),
+		Theme: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "colors"),
+		),
+		ThemeCycleLeft: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("h", "color -"),
+		),
+		ThemeCycleRight: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("l", "color +"),
+		),
+		ThemeToggleBright: key.NewBinding(
+			key.WithKeys("space"),
+			key.WithHelp("space", "bright"),
+		),
+		ThemeReset: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "reset"),
+		),
+		ThemeSave: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "save"),
+		),
 		selectHint: key.NewBinding(
 			key.WithKeys("up", "down", "k", "j"),
 			key.WithHelp("j/k", "select"),
@@ -116,6 +153,14 @@ func newKeyMap() KeyMap {
 		scrollHint: key.NewBinding(
 			key.WithKeys("up", "down", "k", "j"),
 			key.WithHelp("j/k", "scroll"),
+		),
+		themeRowHint: key.NewBinding(
+			key.WithKeys("up", "down", "k", "j"),
+			key.WithHelp("j/k", "row"),
+		),
+		themeCycleHint: key.NewBinding(
+			key.WithKeys("left", "right", "h", "l"),
+			key.WithHelp("h/l", "color"),
 		),
 	}
 }
@@ -156,6 +201,7 @@ func (k KeyMap) MeterHints() []hintEntry {
 		{k.zoomHint, 5},
 		{k.Modal, 6},
 		{k.ToggleSource, 2},
+		{k.Theme, 7},
 		{k.Help, hintCore},
 		{k.Quit, hintCore},
 	}
@@ -177,12 +223,30 @@ func (k KeyMap) DetailsHints() []hintEntry {
 	}
 }
 
+// ThemeHints is the theme-picker screen's hint-row entries (tui/SPEC.md §5
+// Stage E.1): back and save are always shown; row-move drops before
+// color-cycle (the picker is useless without cycling, less so without
+// visible scroll affordance on a tall list), then toggle-bright, then
+// reset.
+func (k KeyMap) ThemeHints() []hintEntry {
+	return []hintEntry{
+		{k.Back, hintCore},
+		{k.themeRowHint, 1},
+		{k.themeCycleHint, hintCore},
+		{k.ThemeToggleBright, 2},
+		{k.ThemeReset, 3},
+		{k.ThemeSave, hintCore},
+		{k.Quit, hintCore},
+	}
+}
+
 // FullHelp feeds the `?` overlay: every binding, grouped navigate /
-// act / app.
+// act / app / theme.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.selectHint, k.Details, k.Back},
 		{k.Timeframe, k.Mode, k.ZoomOut, k.ZoomIn, k.ZoomReset, k.Modal, k.Refresh, k.ToggleSource},
+		{k.Theme, k.themeCycleHint, k.ThemeToggleBright, k.ThemeReset, k.ThemeSave},
 		{k.Help, k.Quit},
 	}
 }

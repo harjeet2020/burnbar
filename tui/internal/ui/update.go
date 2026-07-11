@@ -29,6 +29,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll = m.currentLayout().clampScroll(m.scroll)
 		m = m.clampDetailsScroll()
+		m = m.clampThemeScroll()
 		// Bars snap to the new width — a resize must feel like the terminal
 		// is in charge, never animated (tui/SPEC.md §4/§6).
 		m = m.snapBars()
@@ -105,6 +106,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case emphasisEndMsg:
 		// No state change needed — the bold check reads the clock; returning
 		// forces the redraw that drops it (tui/SPEC.md §6).
+		return m, nil
+	case themeSavedMsg:
+		// The in-memory theme is already committed synchronously the moment
+		// `s` was pressed (handleKey) — a failed write never rolls that
+		// back, it just surfaces a hint (tui/SPEC.md §8: never undo
+		// something the user already saw happen).
+		if msg.err != nil {
+			m.colorsHint = "colors save failed: " + truncateErr(msg.err)
+		} else {
+			m.colorsHint = ""
+		}
 		return m, nil
 	}
 	return m, nil
@@ -310,6 +322,41 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case m.scr == screenDetails && key.Matches(msg, k.Back):
 		m.scr = screenMeter
+	case m.scr == screenMeter && key.Matches(msg, k.Theme):
+		m.scr = screenTheme
+		m.themeCursor = 0
+		m.themeScroll = 0
+		// Fresh seed from the committed palette every open, so repeated
+		// open/edit/cancel/open cycles start from the last saved state,
+		// never silently from built-in defaults.
+		m.themeDraft = m.colors
+	// ThemeCycleLeft/ThemeCycleRight must be checked before the Back case
+	// below: Back's keyset includes "h" (and ThemeCycleLeft's includes
+	// "h" too), and Go's switch{case...} picks the first matching case in
+	// source order — placing these first makes h/l cycle color on this
+	// screen only, without touching Back's behavior anywhere else (the
+	// user-requested h/l override, tui/SPEC.md §5 Stage E.1).
+	case m.scr == screenTheme && key.Matches(msg, k.ThemeCycleLeft):
+		m.themeDraft = m.themeDraft.cycled(m.themeCursor, -1)
+	case m.scr == screenTheme && key.Matches(msg, k.ThemeCycleRight):
+		m.themeDraft = m.themeDraft.cycled(m.themeCursor, 1)
+	case m.scr == screenTheme && key.Matches(msg, k.Up):
+		m = m.moveThemeCursor(-1)
+	case m.scr == screenTheme && key.Matches(msg, k.Down):
+		m = m.moveThemeCursor(1)
+	case m.scr == screenTheme && key.Matches(msg, k.ThemeToggleBright):
+		m.themeDraft = m.themeDraft.toggledBright(m.themeCursor)
+	case m.scr == screenTheme && key.Matches(msg, k.ThemeReset):
+		m.themeDraft = defaultThemeColors()
+	case m.scr == screenTheme && key.Matches(msg, k.ThemeSave):
+		m.colors = m.themeDraft
+		m.theme = buildTheme(m.colors)
+		saved := m.colors
+		m.scr = screenMeter
+		return m, m.saveThemeCmd(colorsConfigFrom(saved))
+	case m.scr == screenTheme && key.Matches(msg, k.Back):
+		// themeDraft is simply discarded — colors/theme are untouched.
+		m.scr = screenMeter
 	}
 	return m, nil
 }
@@ -510,12 +557,12 @@ func (m Model) handleDetailsWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 
 // detailsViewport resolves the current selection's scroll window; ok is
 // false when nothing is selected (mirrors Model.selectedModel).
-func (m Model) detailsViewport(l layout) (detailsViewport, bool) {
+func (m Model) detailsViewport(l layout) (viewport, bool) {
 	st, ok := m.selectedModel()
 	if !ok {
-		return detailsViewport{}, false
+		return viewport{}, false
 	}
-	return computeDetailsViewport(len(m.detailsContent(st, l)), l.listHeight), true
+	return computeViewport(len(m.detailsContent(st, l)), l.listHeight), true
 }
 
 // scrollDetails moves the details screen's scroll offset by delta lines,
@@ -541,5 +588,50 @@ func (m Model) clampDetailsScroll() Model {
 		return m
 	}
 	m.detailsScroll = vp.clampScroll(m.detailsScroll)
+	return m
+}
+
+// moveThemeCursor moves the theme screen's selected token row by delta,
+// clamped to the fixed token list, keeping it visible in the viewport.
+func (m Model) moveThemeCursor(delta int) Model {
+	idx := m.themeCursor + delta
+	if idx < 0 {
+		idx = 0
+	}
+	if n := len(themeTokens); idx > n-1 {
+		idx = n - 1
+	}
+	m.themeCursor = idx
+	return m.ensureThemeCursorVisible()
+}
+
+// ensureThemeCursorVisible adjusts themeScroll so the selected token row
+// is on screen. Token rows are always exactly 1 line each at fixed
+// indices in themeContent's flat output, so this reduces to "is line
+// index themeCursor inside [scroll, scroll+visible)" — no block-width
+// math, unlike the bars list's ensureSelectionVisible.
+func (m Model) ensureThemeCursorVisible() Model {
+	l := m.currentLayout()
+	vp := computeViewport(len(m.themeContent(l)), l.listHeight)
+	if !vp.scrolling {
+		m.themeScroll = 0
+		return m
+	}
+	if m.themeCursor < m.themeScroll {
+		m.themeScroll = m.themeCursor
+	}
+	if m.themeCursor >= m.themeScroll+vp.visible {
+		m.themeScroll = m.themeCursor - vp.visible + 1
+	}
+	m.themeScroll = vp.clampScroll(m.themeScroll)
+	return m
+}
+
+// clampThemeScroll keeps themeScroll valid for the current layout — the
+// theme-screen analog of clampDetailsScroll.
+func (m Model) clampThemeScroll() Model {
+	l := m.currentLayout()
+	vp := computeViewport(len(m.themeContent(l)), l.listHeight)
+	m.themeScroll = vp.clampScroll(m.themeScroll)
 	return m
 }

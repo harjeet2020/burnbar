@@ -23,6 +23,7 @@ type screen int
 const (
 	screenMeter screen = iota
 	screenDetails
+	screenTheme
 )
 
 // Model is the single Bubble Tea state struct for the whole app.
@@ -108,10 +109,32 @@ type Model struct {
 	// is in scroll mode.
 	scroll int
 	// detailsScroll is the line-index scroll offset for the details
-	// screen's flat content list (computeDetailsViewport) — independent
-	// of scroll, the bars list's block-indexed offset (tui/SPEC.md §2
-	// Stage E).
+	// screen's flat content list (computeViewport) — independent of
+	// scroll, the bars list's block-indexed offset (tui/SPEC.md §2 Stage
+	// E).
 	detailsScroll int
+
+	// colors is the committed, source-of-truth palette (tui/SPEC.md §5
+	// Stage E.1) — theme is always buildTheme(colors), rebuilt whenever
+	// colors changes (New, and a theme-picker save).
+	colors themeColors
+	// colorsHint is a one-time startup diagnostic naming any [colors]
+	// token that fell back to default due to an invalid value ("" when
+	// clean) — surfaced on the theme screen itself, not the fixed rows.
+	colorsHint string
+	// themeCursor is the selected token row (0..len(themeTokens)-1) on
+	// the theme screen.
+	themeCursor int
+	// themeScroll is the theme screen's own viewport scroll offset —
+	// mirrors detailsScroll, independent of it.
+	themeScroll int
+	// themeDraft is the picker's uncommitted working copy: cycling,
+	// toggling bright, and resetting mutate only this. colors (and theme)
+	// only change on save (`s`). Re-seeded from colors every time the
+	// picker opens, so repeated open/edit/cancel/open cycles always start
+	// from the last *committed* state, never silently from built-in
+	// defaults.
+	themeDraft themeColors
 
 	scr       screen
 	showHelp  bool
@@ -124,7 +147,8 @@ type Model struct {
 // the first fetches (tui/SPEC.md §7 startup sequence).
 func New(cfg data.Config) Model {
 	glyphs := DefaultGlyphs()
-	theme := DefaultTheme()
+	colors, colorsHint := resolveThemeColors(cfg.Colors)
+	theme := buildTheme(colors)
 
 	rest := data.NewRESTClient(cfg)
 	live, _ := data.NewLiveSource(cfg, rest)
@@ -150,6 +174,9 @@ func New(cfg data.Config) Model {
 		tf:         core.TimeframeToday,
 		spring:     newSpring(),
 		anim:       make(map[string]*barAnim),
+		colors:     colors,
+		colorsHint: colorsHint,
+		themeDraft: colors,
 	}
 	if cfg.HasCredentialsForCredits() {
 		m.credits = data.NewCreditsClient(cfg)

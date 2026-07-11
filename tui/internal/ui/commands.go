@@ -106,6 +106,22 @@ func (m Model) fetchCreditsCmd() tea.Cmd {
 	}
 }
 
+// saveThemeCmd persists a theme-picker save to disk (tui/SPEC.md §5 Stage
+// E.1) — the app's one file-write path, kept off the main goroutine per
+// this file's I/O-only-in-Cmds rule even though it's a small local write.
+// The in-memory theme is already committed synchronously by the caller
+// (handleKey); a write failure only surfaces a hint, never rolls that
+// back.
+func (m Model) saveThemeCmd(c data.ColorsConfig) tea.Cmd {
+	return func() tea.Msg {
+		path, err := data.DefaultPath()
+		if err != nil {
+			return themeSavedMsg{err: err}
+		}
+		return themeSavedMsg{err: data.SaveColors(path, c)}
+	}
+}
+
 // armCreditTick schedules a credits-debounce tick for the given action.
 func armCreditTick(a data.Action) tea.Cmd {
 	d := time.Until(a.ArmTickAt)

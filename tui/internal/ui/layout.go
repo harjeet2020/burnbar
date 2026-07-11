@@ -121,35 +121,35 @@ func (l layout) clampScroll(scroll int) int {
 	return scroll
 }
 
-// detailsViewport is the scroll window for the details screen's flat
-// content-line list (Model.detailsContent) — line-indexed, unlike the
-// bars list's model-block-indexed layout.scrolling/visible/maxScroll,
-// because details content height depends on breakpoint + provider count,
-// not model count, and isn't known until the content is built
-// (tui/SPEC.md §2 Stage E).
-type detailsViewport struct {
+// viewport is the scroll window for a screen's flat content-line list
+// (e.g. Model.detailsContent, Model.themeContent) — line-indexed, unlike
+// the bars list's model-block-indexed layout.scrolling/visible/maxScroll,
+// because this content's height depends on breakpoint + item count and
+// isn't known until the content is built (tui/SPEC.md §2 Stage E, §5
+// Stage E.1).
+type viewport struct {
 	scrolling bool
 	visible   int
 	maxScroll int
 }
 
-// computeDetailsViewport mirrors computeLayout's bars-list scroll math
-// (reserve one row at each end for "N more" indicators) applied to an
-// arbitrary line count instead of a 3k+1 block rhythm.
-func computeDetailsViewport(totalLines, listHeight int) detailsViewport {
+// computeViewport mirrors computeLayout's bars-list scroll math (reserve
+// one row at each end for "N more" indicators) applied to an arbitrary
+// line count instead of a 3k+1 block rhythm.
+func computeViewport(totalLines, listHeight int) viewport {
 	if totalLines <= listHeight {
-		return detailsViewport{visible: totalLines}
+		return viewport{visible: totalLines}
 	}
 	visible := listHeight - 2
 	if visible < 1 {
 		visible = 1
 	}
-	return detailsViewport{scrolling: true, visible: visible, maxScroll: totalLines - visible}
+	return viewport{scrolling: true, visible: visible, maxScroll: totalLines - visible}
 }
 
 // clampScroll keeps a scroll offset inside the valid range for this
 // viewport.
-func (v detailsViewport) clampScroll(scroll int) int {
+func (v viewport) clampScroll(scroll int) int {
 	if !v.scrolling || scroll < 0 {
 		return 0
 	}
