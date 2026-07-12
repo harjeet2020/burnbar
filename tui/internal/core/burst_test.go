@@ -256,4 +256,17 @@ func TestBurstInputOutputValue(t *testing.T) {
 			t.Errorf("InputValue = %v, want 0", got)
 		}
 	})
+
+	t.Run("cost mode falls back to token distribution when only one split cost is reported", func(t *testing.T) {
+		// Mirrors SplitFraction's all-or-nothing requirement: a burst with
+		// only InputCost reported must not mix a real dollar value on one
+		// side with a token-distributed estimate on the other.
+		b := Burst{InputTokens: 300, OutputTokens: 100, Cost: 0.08, InputCost: f64(0.03)}
+		if got := b.InputValue(ModeCost); got != 0.06 { // 0.08 * 300/400, not the reported 0.03
+			t.Errorf("InputValue = %v, want 0.06", got)
+		}
+		if got := b.OutputValue(ModeCost); got != 0.02 { // 0.08 * 100/400
+			t.Errorf("OutputValue = %v, want 0.02", got)
+		}
+	})
 }

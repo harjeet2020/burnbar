@@ -50,12 +50,17 @@ type Burst struct {
 // cost mode prefers the summed actual split costs, falling back to
 // distributing the burst's total Cost by its own token ratio when the
 // split costs are unreported — mirroring SplitFraction's fallback so the
-// highlight and the segment boundary never visually disagree.
+// highlight and the segment boundary never visually disagree. Both split
+// costs must be present to use them (matching SplitFraction's own
+// requirement) rather than checking each field independently: a burst
+// with only one side reported would otherwise mix a real dollar value on
+// one side with a token-distributed estimate on the other, disagreeing
+// with SplitFraction's all-or-nothing choice for the same row.
 func (b Burst) InputValue(mode Mode) float64 {
 	if mode == ModeTokens {
 		return float64(b.InputTokens)
 	}
-	if b.InputCost != nil {
+	if b.InputCost != nil && b.OutputCost != nil {
 		return *b.InputCost
 	}
 	if total := b.InputTokens + b.OutputTokens; total > 0 {
@@ -68,7 +73,7 @@ func (b Burst) OutputValue(mode Mode) float64 {
 	if mode == ModeTokens {
 		return float64(b.OutputTokens)
 	}
-	if b.OutputCost != nil {
+	if b.InputCost != nil && b.OutputCost != nil {
 		return *b.OutputCost
 	}
 	if total := b.InputTokens + b.OutputTokens; total > 0 {
@@ -80,6 +85,20 @@ func (b Burst) OutputValue(mode Mode) float64 {
 // TotalTokens — see ModelStat.TotalTokens; the recent-request modal's
 // tokens row total (tui/SPEC.md §2 Stage D.4 refinement).
 func (b Burst) TotalTokens() int64 { return b.InputTokens + b.OutputTokens }
+
+// Value — see ModelStat.Value; the burst's own total in the active mode's
+// unit, from the same authoritative fields (Cost / TotalTokens) rather
+// than InputValue+OutputValue. The highlight geometry (meter.go) derives
+// the bright output share as this total's fraction minus the bright input
+// share, rather than computing an independent output fraction, so the two
+// always sum to the burst's true total share of the bar — no residual gap
+// or overlap from InputValue/OutputValue not summing back to Value.
+func (b Burst) Value(mode Mode) float64 {
+	if mode == ModeTokens {
+		return float64(b.TotalTokens())
+	}
+	return b.Cost
+}
 
 // CacheHitPct — see ModelStat.CacheHitPct.
 func (b Burst) CacheHitPct() *float64 { return pctOf(b.CachedTokens, b.InputTokens) }

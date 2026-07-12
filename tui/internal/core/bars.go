@@ -192,6 +192,19 @@ func clampCells(n, max int) int {
 // Cost mode: primary source is the window's summed actual split costs
 // (cache discounts embodied); if unreported (nil) or both zero (free
 // models), falls back to token volumes; with no tokens either, 0.
+//
+// The split-cost share is measured against m.Cost — the same total that
+// drives the bar's overall length (ModelStat.Value) and the burst
+// highlight's normalization (Burst.InputValue/OutputValue divided by
+// ModelStat.Value) — rather than InputCost+OutputCost. CostUSD,
+// InputCostUSD, and OutputCostUSD are three independently-reported trace
+// attributes (supabase/functions/ingest/parse.ts) with no guarantee that
+// the split sums to the total; dividing by their own sum here while the
+// highlight divides by m.Cost let the two boundaries drift apart by a
+// rounding-level fraction that a small bar (e.g. a model's first request
+// in the window, where the burst is the whole bar) turns into a whole
+// spurious cell — a stale-looking "old" sliver in front of the "new"
+// highlight that was never really there.
 func SplitFraction(m ModelStat, mode Mode) float64 {
 	if mode == ModeTokens {
 		if total := m.InputTokens + m.OutputTokens; total > 0 {
@@ -199,10 +212,8 @@ func SplitFraction(m ModelStat, mode Mode) float64 {
 		}
 		return 0
 	}
-	if m.InputCost != nil && m.OutputCost != nil {
-		if total := *m.InputCost + *m.OutputCost; total > 0 {
-			return *m.InputCost / total
-		}
+	if m.InputCost != nil && m.OutputCost != nil && m.Cost > 0 {
+		return *m.InputCost / m.Cost
 	}
 	if total := m.InputTokens + m.OutputTokens; total > 0 {
 		return float64(m.InputTokens) / float64(total)

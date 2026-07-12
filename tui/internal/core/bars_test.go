@@ -162,9 +162,21 @@ func TestSplitFraction(t *testing.T) {
 	}{
 		{
 			name: "cost mode: cost share when both split costs reported",
-			m:    ModelStat{InputTokens: 10, OutputTokens: 990, InputCost: f64(0.25), OutputCost: f64(0.75)},
+			m:    ModelStat{InputTokens: 10, OutputTokens: 990, Cost: 1, InputCost: f64(0.25), OutputCost: f64(0.75)},
 			mode: ModeCost,
 			want: 0.25, // costs, NOT the 0.01 token share
+		},
+		{
+			name: "cost mode: split costs reported but don't sum to Cost — measured against Cost, not their own sum",
+			m:    ModelStat{InputTokens: 10, OutputTokens: 990, Cost: 0.30, InputCost: f64(0.06), OutputCost: f64(0.21)},
+			mode: ModeCost,
+			want: 0.2, // 0.06 / 0.30, not 0.06 / (0.06+0.21)
+		},
+		{
+			name: "cost mode: token fallback when split costs reported but Cost is zero",
+			m:    ModelStat{InputTokens: 75, OutputTokens: 25, InputCost: f64(0.25), OutputCost: f64(0.75)},
+			mode: ModeCost,
+			want: 0.75,
 		},
 		{
 			name: "cost mode: token fallback when both costs nil",
@@ -310,4 +322,43 @@ func TestSplitBar(t *testing.T) {
 			t.Errorf("got BrightInput=%d BrightOutput=%d, want 0/0 (frac exactly 0, no floor)", g.BrightInput, g.BrightOutput)
 		}
 	})
+}
+
+// TestFirstRequestCollapsesToTwoBrightSegments is a regression test for a
+// bug where a model's first-ever request in the window rendered as 4 bar
+// segments (dim input, bright input, dim output, bright output) instead of
+// 2 (fully bright input, fully bright output). Root cause: CostUSD,
+// InputCostUSD, and OutputCostUSD are independently-reported trace
+// attributes (supabase/functions/ingest/parse.ts) with no guarantee that
+// the split sums to the total, so SplitFraction (dividing by
+// InputCost+OutputCost) and the burst highlight (dividing by Cost) landed
+// on very slightly different fractions of the bar — invisible on a bar
+// with real history, but a full spurious cell on a brand-new bar where the
+// burst is the whole thing. Fixed by measuring SplitFraction against
+// m.Cost (the same total the highlight uses) and by deriving the bright
+// output share as the burst's total share minus its input share (meter.go
+// renderResolvedBar), rather than an independently-reported OutputCost
+// fraction that isn't guaranteed to sum back to the total either.
+func TestFirstRequestCollapsesToTwoBrightSegments(t *testing.T) {
+	// Deliberately noisy real-world data: input+output cost sums to
+	// 0.0100, but the independently-reported total is 0.0102 — a 2% gap,
+	// plausible trace rounding/fee noise, not a contrived exact match.
+	ic, oc := 0.0031, 0.0069
+	st := ModelStat{InputTokens: 1000, OutputTokens: 500, Cost: 0.0102, InputCost: &ic, OutputCost: &oc}
+	burst := Burst{InputTokens: 1000, OutputTokens: 500, Cost: 0.0102, InputCost: &ic, OutputCost: &oc}
+
+	inputFrac := SplitFraction(st, ModeCost)
+	denom := st.Value(ModeCost)
+	burstTotalFrac := burst.Value(ModeCost) / denom
+	brightInputFrac := burst.InputValue(ModeCost) / denom
+	brightOutputFrac := burstTotalFrac - brightInputFrac // meter.go's residual formula, not burst.OutputValue directly
+
+	for _, w := range []int{1, 2, 3, 5, 10, 20, 40, 60, 100} {
+		g := SplitBar(w, inputFrac, brightInputFrac, brightOutputFrac)
+		plainInput := g.InputCells - g.BrightInput
+		plainOutput := g.Cells - g.InputCells - g.BrightOutput
+		if plainInput != 0 || plainOutput != 0 {
+			t.Errorf("w=%d: spurious plain segment on a first-ever request — geo=%+v plainInput=%d plainOutput=%d", w, g, plainInput, plainOutput)
+		}
+	}
 }

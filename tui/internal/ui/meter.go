@@ -261,8 +261,16 @@ func (m Model) renderResolvedBar(st core.ModelStat, target int) string {
 	var burstInput, burstOutput float64
 	if m.burst != nil && m.burst.Model == st.Name {
 		if denom := st.Value(m.mode); denom > 0 {
+			// burstOutput is the burst's total bar share minus its input
+			// share, not an independently-computed fraction — otherwise
+			// InputValue+OutputValue not summing exactly back to the
+			// burst's own Value (they're separately-sourced fields, e.g.
+			// reported split costs vs. the total cost) leaves a residual
+			// sliver of "old" color at the zone boundary even when the
+			// burst is the model's entire window contribution.
+			burstTotal := m.burst.Value(m.mode) / denom
 			burstInput = m.burst.InputValue(m.mode) / denom
-			burstOutput = m.burst.OutputValue(m.mode) / denom
+			burstOutput = burstTotal - burstInput
 		}
 	}
 	pulsing := m.burst != nil && m.burst.Model == st.Name && time.Now().Before(m.accentEmphasisUntil)
