@@ -2,7 +2,7 @@
 // (tui/SPEC.md §7): one pure function from the stores to the sorted
 // []ModelStat both screens render. All ratios are derived from window
 // sums (never averaged across rows), every division is zero-guarded,
-// and nil sums stay nil so unreported values render "—" (root SPEC §2).
+// and nil sums stay nil so unreported values render "—" (ARCHITECTURE.md §2).
 
 package core
 
@@ -225,7 +225,7 @@ func sortProviders(ps []ProviderStat) {
 
 // addI64 sums two nullable int64 sums under SQL SUM semantics: nil only
 // when both sides are nil, so "reported as zero" survives merging while
-// "never reported" stays nil (root SPEC §2).
+// "never reported" stays nil (ARCHITECTURE.md §2).
 func addI64(a, b *int64) *int64 {
 	if a == nil && b == nil {
 		return nil
@@ -257,7 +257,7 @@ func addF64(a, b *float64) *float64 {
 
 // pctOf derives a percentage from a nullable numerator sum and an
 // integer denominator; nil numerator or zero denominator yields nil
-// (render "—", never a fake 0 — root SPEC §2).
+// (render "—", never a fake 0 — ARCHITECTURE.md §2).
 func pctOf(num *int64, den int64) *float64 {
 	if num == nil || den == 0 {
 		return nil
@@ -350,7 +350,7 @@ func (m ModelStat) InputCostPct() *float64 { return pctOfFloat(m.InputCost, m.Co
 // OutputCostPct — see InputCostPct, output's share.
 func (m ModelStat) OutputCostPct() *float64 { return pctOfFloat(m.OutputCost, m.Cost) }
 
-// AvgDurationMS is duration_ms_sum / timed_request_count (root SPEC §2).
+// AvgDurationMS is duration_ms_sum / timed_request_count (ARCHITECTURE.md §3).
 func (m ModelStat) AvgDurationMS() *float64 { return avgOf(m.DurationMSSum, m.TimedRequests) }
 
 // AvgCost is the mean cost per request; nil when Requests is zero

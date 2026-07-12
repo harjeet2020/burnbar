@@ -18,7 +18,7 @@
  *      Broadcast destination is saved) with 200.
  *   4. Parse the OTLP payload and upsert rows with duplicates ignored.
  *
- * Status-code contract (SPEC.md Phase 1): partial or malformed data is
+ * Status-code contract (ARCHITECTURE.md §4): partial or malformed data is
  * **never** a 5xx — parse what we can, log the rest, return 200 (OpenRouter
  * doesn't retry, so failing loudly buys nothing and a 5xx streak looks like
  * an outage). Only a *total* database failure (e.g. paused project) returns

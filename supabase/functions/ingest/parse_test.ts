@@ -9,7 +9,7 @@
  * parser is pure, so no Supabase stack, network, or database is needed.
  * `--allow-read` is only for loading the fixture files.
  *
- * Coverage per SPEC.md Phase 1: happy path for every captured model,
+ * Coverage: happy path for every captured model,
  * missing required attribute → skip, multi-span payloads, empty/malformed
  * payloads, and missing nullable attributes → `null` columns.
  */

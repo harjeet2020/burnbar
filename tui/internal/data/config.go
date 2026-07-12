@@ -17,7 +17,7 @@ import (
 
 // LiveSource values accepted by the live_source config key. "realtime" is
 // the default — a phx Phoenix socket to Supabase Realtime that lights a bar
-// within ~1–2s of a request (root SPEC §6). "poll" is the manual backup: a
+// within ~1–2s of a request (ARCHITECTURE.md §5). "poll" is the manual backup: a
 // 20s PostgREST walk of the requests table, built on nothing but net/http,
 // selectable here or toggled at runtime with `p`.
 const (

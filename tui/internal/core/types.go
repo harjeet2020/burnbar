@@ -12,7 +12,7 @@ import "time"
 
 // Timeframe is the active aggregation window. "today" is the user's local
 // calendar day; week/month are the current UTC calendar week (Mon-Sun)
-// and UTC calendar month (root SPEC §2).
+// and UTC calendar month (ARCHITECTURE.md §5).
 type Timeframe int
 
 // The three selectable windows, in `t`-cycle order.
@@ -63,7 +63,7 @@ func (md Mode) Toggle() Mode {
 // the bars list and details screen render from. In Stage B this becomes
 // the output of aggregate(); Stage A fills it from fixtures.
 //
-// NULL vs 0 (root SPEC §2): pointer fields distinguish "the payload did
+// NULL vs 0 (ARCHITECTURE.md §2): pointer fields distinguish "the payload did
 // not report this" (nil → render "—") from "reported as zero" (0). Ratios
 // derived from nil sums must never be computed.
 type ModelStat struct {
@@ -89,7 +89,7 @@ type ModelStat struct {
 	ReasoningTokens *int64
 	DurationMSSum   *int64
 	// TimedRequests counts requests that reported a duration — the
-	// avg-duration denominator (root SPEC §2).
+	// avg-duration denominator (ARCHITECTURE.md §3).
 	TimedRequests int64
 	// Providers is the per-(model, provider_slug) grain for the details
 	// screen's split table, sorted by cost descending (ties slug

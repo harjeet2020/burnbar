@@ -83,7 +83,7 @@ type Model struct {
 	// while it holds, even if new data overflows it (bars just clamp).
 	manualScale *float64
 	// burst is the most recent coalesced live-request burst (tui/SPEC.md
-	// §5/§7), recomputed in rebuilt(); nil until the first live row of the
+	// §3/§7), recomputed in rebuilt(); nil until the first live row of the
 	// session. Drives the single latest-burst highlight.
 	burst *core.Burst
 

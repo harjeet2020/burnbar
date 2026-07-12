@@ -1,6 +1,6 @@
 // Realtime LiveSource (tui/SPEC.md §7) — a Phoenix-channel WebSocket to
 // Supabase Realtime carrying postgres_changes INSERT events on
-// public.requests. This is the default source (root SPEC §6): a real
+// public.requests. This is the default source (ARCHITECTURE.md §5): a real
 // request lights a bar in ~1–2s, versus the 20s worst case of the poll
 // backup.
 //

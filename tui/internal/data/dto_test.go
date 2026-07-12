@@ -9,7 +9,7 @@ import (
 func TestDecodeRequestsNullVsZero(t *testing.T) {
 	// Two rows: one fully reported (with a zero cached_tokens), one with
 	// the nullable attributes absent. The zero must survive as 0, the
-	// nulls must stay nil — never conflated (root SPEC §2).
+	// nulls must stay nil — never conflated (ARCHITECTURE.md §2).
 	body := []byte(`[
 	  {
 	    "trace_id": "t1", "span_id": "s1", "model": "deepseek/deepseek-v4",

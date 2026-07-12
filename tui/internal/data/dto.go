@@ -4,7 +4,7 @@
 // concerns (its package doc promises pure, dependency-free math). Each
 // DTO maps into the matching core type, preserving the NULL-vs-0 rule:
 // a JSON null decodes to a nil pointer ("never reported"), a JSON 0 to a
-// pointed-to zero ("reported as zero") — root SPEC §2.
+// pointed-to zero ("reported as zero") — ARCHITECTURE.md §2.
 
 package data
 

@@ -2,7 +2,7 @@
 // (tui/SPEC.md §7). It talks straight to OpenRouter with the user's local
 // inference key; the value never touches the Supabase backend and is
 // shown as-is with no local decrement (subtracting broadcast costs from a
-// ~60s-stale cached balance causes bounce-up artifacts, root SPEC §2).
+// ~60s-stale cached balance causes bounce-up artifacts, ARCHITECTURE.md §7).
 
 package data
 

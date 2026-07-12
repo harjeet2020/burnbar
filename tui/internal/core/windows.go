@@ -29,7 +29,7 @@ func NextLocalMidnight(now time.Time, loc *time.Location) time.Time {
 }
 
 // UTCDayStart returns midnight UTC of now's UTC day — the grain the
-// usage_daily baseline is bucketed on (root SPEC §2).
+// usage_daily baseline is bucketed on (ARCHITECTURE.md §3).
 func UTCDayStart(now time.Time) time.Time {
 	y, m, d := now.UTC().Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)

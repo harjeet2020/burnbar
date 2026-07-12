@@ -3,7 +3,7 @@
 // (trace_id, span_id) dedupe store the frontends layer live events into
 // (tui/SPEC.md §7).
 //
-// NULL vs 0 (root SPEC §2): nullable SQL columns are pointer fields —
+// NULL vs 0 (ARCHITECTURE.md §2): nullable SQL columns are pointer fields —
 // nil means "the payload did not report this attribute", a pointed-to
 // zero means "reported as zero". Derived stats never conflate the two.
 
@@ -67,7 +67,7 @@ func (r RequestRow) TotalTokens() int64 { return r.InputTokens + r.OutputTokens 
 
 // DailyRow is one `usage_daily` view row: (UTC day, model, provider_slug)
 // grain with additive sums only — ratios are always derived client-side
-// from these sums at the selected window (root SPEC §2).
+// from these sums at the selected window (ARCHITECTURE.md §3).
 //
 // SQL SUM semantics for the pointer fields: nil only when every summed
 // value in the group was NULL; if any row reported, the sum of the

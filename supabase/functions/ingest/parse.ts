@@ -9,15 +9,15 @@
  * `deno test` against the captured fixtures in `supabase/tests/fixtures/`
  * — no running server or database needed.
  *
- * The parser is **tolerant by contract** (SPEC.md §4): OpenRouter's OTLP
- * attribute names are confirmed by captured fixtures, not documentation,
+ * The parser is **tolerant by contract** (ARCHITECTURE.md §4): OpenRouter's
+ * OTLP attribute names are confirmed by captured fixtures, not documentation,
  * so unknown attributes are ignored and missing *nullable* attributes
  * produce `null` columns. Only when one of the not-null core columns
  * (`model`, tokens, cost, `requested_at`, span identity) is missing is a
  * span logged and skipped — and even then the rest of the payload still
  * parses. The caller must never turn a partial parse into a 5xx.
  *
- * Attribute → column mapping (kept in sync with SPEC.md §4):
+ * Attribute → column mapping (kept in sync with ARCHITECTURE.md §2):
  *
  * | Column              | OTLP source                                        |
  * |---------------------|----------------------------------------------------|
@@ -47,7 +47,7 @@
  * Field names match the table's column names exactly so the array can be
  * passed straight to a PostgREST insert. `null` means "the payload did not
  * report this attribute" — never coerced to `0`, which would mean
- * "reported as zero" (SPEC.md §4).
+ * "reported as zero" (ARCHITECTURE.md §2).
  */
 export interface RequestRow {
   /** OTLP trace id — half of the redelivery-dedupe key. */
@@ -192,7 +192,7 @@ function toNanoEpoch(raw: unknown): bigint | null {
 
 /**
  * Converts a nano-epoch to an ISO-8601 UTC string for a `timestamptz`
- * column (millisecond precision — sub-ms has no consumer, SPEC.md §9).
+ * column (millisecond precision — sub-ms has no consumer).
  *
  * @param nanos - Nanoseconds since the Unix epoch.
  * @returns ISO-8601 timestamp string.
